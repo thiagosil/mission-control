@@ -17,6 +17,9 @@ config :mission_control, MissionControlWeb.Endpoint,
   secret_key_base: "iZFeqFlQ6PneNuM8Skx57mKCTf/TyAxGjc3uyVMVIn/5UJ2FyeBv0oVjcwpjrXbc",
   server: false
 
+# Use a fast command for agent processes in tests
+config :mission_control, :default_agent_command, "echo '[agent] test output'"
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 

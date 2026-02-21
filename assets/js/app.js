@@ -25,11 +25,26 @@ import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/mission_control"
 import topbar from "../vendor/topbar"
 
+const TerminalScroll = {
+  mounted() {
+    this.observer = new MutationObserver(() => {
+      this.el.scrollTop = this.el.scrollHeight
+    })
+    this.observer.observe(this.el, { childList: true, subtree: true })
+  },
+  updated() {
+    this.el.scrollTop = this.el.scrollHeight
+  },
+  destroyed() {
+    if (this.observer) this.observer.disconnect()
+  }
+}
+
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks},
+  hooks: {...colocatedHooks, TerminalScroll},
 })
 
 // Show progress bar on live navigation and form submits

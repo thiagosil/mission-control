@@ -14,8 +14,10 @@ defmodule MissionControl.Application do
        repos: Application.fetch_env!(:mission_control, :ecto_repos), skip: skip_migrations?()},
       {DNSCluster, query: Application.get_env(:mission_control, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: MissionControl.PubSub},
-      # Start a worker by calling: MissionControl.Worker.start_link(arg)
-      # {MissionControl.Worker, arg},
+      {Registry, keys: :unique, name: MissionControl.AgentRegistry},
+      MissionControl.Agents.AgentSupervisor,
+      # Reset agents left as "running" from a previous server session
+      {Task, &MissionControl.Agents.reset_stale_agents/0},
       # Start to serve requests, typically the last entry
       MissionControlWeb.Endpoint
     ]
