@@ -2,14 +2,20 @@ defmodule MissionControlWeb.DashboardLive do
   use MissionControlWeb, :live_view
 
   alias MissionControl.Agents
+  alias MissionControl.Tasks
+  alias MissionControl.Tasks.Task
+
+  @columns Task.columns()
 
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
       Agents.subscribe()
+      Tasks.subscribe()
     end
 
     agents = Agents.list_agents()
+    tasks = Tasks.list_tasks()
 
     {:ok,
      assign(socket,
@@ -17,9 +23,15 @@ defmodule MissionControlWeb.DashboardLive do
        agents: agents,
        selected_agent_id: nil,
        terminal_lines: [],
-       terminal_status: nil
+       terminal_status: nil,
+       tasks: tasks,
+       columns: @columns,
+       show_task_form: false,
+       task_form: to_form(Task.changeset(%Task{}, %{}))
      )}
   end
+
+  # --- Agent events ---
 
   @impl true
   def handle_event("spawn_agent", _params, socket) do
@@ -61,6 +73,70 @@ defmodule MissionControlWeb.DashboardLive do
     {:noreply, select_agent(socket, String.to_integer(id))}
   end
 
+  # --- Task events ---
+
+  def handle_event("show_task_form", _params, socket) do
+    {:noreply,
+     assign(socket, show_task_form: true, task_form: to_form(Task.changeset(%Task{}, %{})))}
+  end
+
+  def handle_event("cancel_task_form", _params, socket) do
+    {:noreply, assign(socket, show_task_form: false)}
+  end
+
+  def handle_event("validate_task", %{"task" => params}, socket) do
+    changeset = Task.changeset(%Task{}, params) |> Map.put(:action, :validate)
+    {:noreply, assign(socket, task_form: to_form(changeset))}
+  end
+
+  def handle_event("create_task", %{"task" => params}, socket) do
+    case Tasks.create_task(params) do
+      {:ok, task} ->
+        tasks = socket.assigns.tasks ++ [task]
+
+        {:noreply,
+         socket
+         |> assign(show_task_form: false, tasks: tasks)
+         |> put_flash(:info, "Task created")}
+
+      {:error, changeset} ->
+        {:noreply, assign(socket, task_form: to_form(changeset))}
+    end
+  end
+
+  def handle_event("move_task", %{"id" => id, "column" => column}, socket) do
+    task = Tasks.get_task!(String.to_integer(id))
+
+    case Tasks.move_task(task, column) do
+      {:ok, updated} ->
+        tasks =
+          Enum.map(socket.assigns.tasks, fn t -> if t.id == updated.id, do: updated, else: t end)
+
+        {:noreply, assign(socket, tasks: tasks)}
+
+      {:error, :invalid_transition} ->
+        {:noreply, put_flash(socket, :error, "Invalid transition")}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Failed to move task")}
+    end
+  end
+
+  def handle_event("delete_task", %{"id" => id}, socket) do
+    task = Tasks.get_task!(String.to_integer(id))
+
+    case Tasks.delete_task(task) do
+      {:ok, deleted} ->
+        tasks = Enum.reject(socket.assigns.tasks, fn t -> t.id == deleted.id end)
+        {:noreply, assign(socket, tasks: tasks)}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to delete task")}
+    end
+  end
+
+  # --- PubSub handlers ---
+
   @impl true
   def handle_info({:agent_changed, agent}, socket) do
     agents = update_agent_in_list(socket.assigns.agents, agent)
@@ -93,10 +169,26 @@ defmodule MissionControlWeb.DashboardLive do
     end
   end
 
+  def handle_info({:task_created, task}, socket) do
+    tasks = socket.assigns.tasks ++ [task]
+    {:noreply, assign(socket, tasks: tasks)}
+  end
+
+  def handle_info({:task_updated, task}, socket) do
+    tasks = Enum.map(socket.assigns.tasks, fn t -> if t.id == task.id, do: task, else: t end)
+    {:noreply, assign(socket, tasks: tasks)}
+  end
+
+  def handle_info({:task_deleted, task}, socket) do
+    tasks = Enum.reject(socket.assigns.tasks, fn t -> t.id == task.id end)
+    {:noreply, assign(socket, tasks: tasks)}
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
+  # --- Helpers ---
+
   defp select_agent(socket, agent_id) do
-    # Unsubscribe from previous agent
     if socket.assigns.selected_agent_id do
       Agents.unsubscribe_from_output(socket.assigns.selected_agent_id)
     end
@@ -128,6 +220,20 @@ defmodule MissionControlWeb.DashboardLive do
     else
       [agent | agents]
     end
+  end
+
+  defp tasks_for_column(tasks, column) do
+    Enum.filter(tasks, fn t -> t.column == column end)
+  end
+
+  defp column_label("inbox"), do: "Inbox"
+  defp column_label("assigned"), do: "Assigned"
+  defp column_label("in_progress"), do: "In Progress"
+  defp column_label("review"), do: "Review"
+  defp column_label("done"), do: "Done"
+
+  defp next_columns(column) do
+    Task.valid_transitions() |> Map.get(column, [])
   end
 
   defp status_color("running"), do: "bg-success"
@@ -204,16 +310,70 @@ defmodule MissionControlWeb.DashboardLive do
 
       <%!-- Task Board (center) --%>
       <main class="flex-1 flex flex-col overflow-hidden">
-        <div class="px-5 py-4 border-b border-base-300 bg-base-100">
+        <div class="px-5 py-4 border-b border-base-300 bg-base-100 flex items-center justify-between">
           <h2 class="text-sm font-semibold text-base-content tracking-tight">Task Board</h2>
+          <button
+            phx-click="show_task_form"
+            class="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-primary text-primary-content text-xs font-medium hover:bg-primary/90 transition-colors cursor-pointer"
+          >
+            <.icon name="hero-plus-micro" class="size-3.5" /> New Task
+          </button>
         </div>
+
+        <%!-- Task creation modal --%>
+        <%= if @show_task_form do %>
+          <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div class="bg-base-100 rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
+              <h3 class="text-sm font-semibold text-base-content mb-4">Create Task</h3>
+              <.form
+                for={@task_form}
+                phx-submit="create_task"
+                phx-change="validate_task"
+                class="space-y-4"
+              >
+                <div>
+                  <label class="text-xs font-medium text-base-content/60 mb-1 block">Title</label>
+                  <.input
+                    field={@task_form[:title]}
+                    type="text"
+                    placeholder="Task title"
+                    phx-debounce="300"
+                    class="input input-bordered input-sm w-full"
+                  />
+                </div>
+                <div>
+                  <label class="text-xs font-medium text-base-content/60 mb-1 block">
+                    Description
+                  </label>
+                  <.input
+                    field={@task_form[:description]}
+                    type="textarea"
+                    placeholder="Task description (optional)"
+                    rows="3"
+                    phx-debounce="300"
+                    class="textarea textarea-bordered textarea-sm w-full"
+                  />
+                </div>
+                <div class="flex justify-end gap-2 pt-2">
+                  <button type="button" phx-click="cancel_task_form" class="btn btn-ghost btn-sm">
+                    Cancel
+                  </button>
+                  <button type="submit" class="btn btn-primary btn-sm">Create</button>
+                </div>
+              </.form>
+            </div>
+          </div>
+        <% end %>
+
         <div class="flex-1 overflow-x-auto p-4">
           <div class="flex gap-0.5 h-full min-w-max">
-            <.kanban_column title="Inbox" count={0} />
-            <.kanban_column title="Assigned" count={0} />
-            <.kanban_column title="In Progress" count={0} />
-            <.kanban_column title="Review" count={0} />
-            <.kanban_column title="Done" count={0} />
+            <.kanban_column
+              :for={col <- @columns}
+              title={column_label(col)}
+              column={col}
+              tasks={tasks_for_column(@tasks, col)}
+              transitions={next_columns(col)}
+            />
           </div>
         </div>
       </main>
@@ -262,18 +422,61 @@ defmodule MissionControlWeb.DashboardLive do
   end
 
   attr :title, :string, required: true
-  attr :count, :integer, default: 0
+  attr :column, :string, required: true
+  attr :tasks, :list, default: []
+  attr :transitions, :list, default: []
 
   defp kanban_column(assigns) do
     ~H"""
     <div class="w-48 flex-shrink-0 flex flex-col">
       <div class="px-2.5 py-2 flex items-center justify-between mb-1.5">
         <span class="text-xs font-medium text-base-content/40">{@title}</span>
-        <span class="text-[11px] text-base-content/20 tabular-nums">{@count}</span>
+        <span class="text-[11px] text-base-content/20 tabular-nums">{length(@tasks)}</span>
       </div>
       <div class="flex-1 flex flex-col gap-1.5 p-1 min-h-32 overflow-y-auto">
-        <p class="text-xs text-base-content/30 text-center mt-4">No tasks</p>
+        <%= if @tasks == [] do %>
+          <p class="text-xs text-base-content/30 text-center mt-4">No tasks</p>
+        <% else %>
+          <.task_card :for={task <- @tasks} task={task} transitions={@transitions} />
+        <% end %>
       </div>
+    </div>
+    """
+  end
+
+  attr :task, :map, required: true
+  attr :transitions, :list, default: []
+
+  defp task_card(assigns) do
+    ~H"""
+    <div class="bg-base-100 rounded-lg border border-base-300 p-2.5 shadow-sm group">
+      <div class="flex items-start justify-between gap-1">
+        <p class="text-xs font-medium text-base-content leading-snug flex-1">{@task.title}</p>
+        <button
+          phx-click="delete_task"
+          phx-value-id={@task.id}
+          data-confirm="Delete this task?"
+          class="opacity-0 group-hover:opacity-100 p-0.5 rounded text-base-content/30 hover:text-error transition-all cursor-pointer"
+        >
+          <.icon name="hero-x-mark-micro" class="size-3" />
+        </button>
+      </div>
+      <%= if @task.description && @task.description != "" do %>
+        <p class="text-[11px] text-base-content/40 mt-1 line-clamp-2">{@task.description}</p>
+      <% end %>
+      <%= if @transitions != [] do %>
+        <div class="flex gap-1 mt-2">
+          <button
+            :for={target <- @transitions}
+            phx-click="move_task"
+            phx-value-id={@task.id}
+            phx-value-column={target}
+            class="text-[10px] px-1.5 py-0.5 rounded bg-base-200 text-base-content/40 hover:text-base-content/70 hover:bg-base-300 transition-colors cursor-pointer"
+          >
+            {column_label(target)}
+          </button>
+        </div>
+      <% end %>
     </div>
     """
   end

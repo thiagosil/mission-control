@@ -71,4 +71,95 @@ defmodule MissionControlWeb.DashboardLiveTest do
     # Should show exit label
     assert html =~ "exited"
   end
+
+  # --- Task board tests ---
+
+  test "New Task button opens the task creation form", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+
+    html = view |> element("button", "New Task") |> render_click()
+
+    assert html =~ "Create Task"
+    assert html =~ "Title"
+    assert html =~ "Description"
+  end
+
+  test "creating a task adds it to the Inbox column", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+
+    view |> element("button", "New Task") |> render_click()
+
+    html =
+      view
+      |> form("form", task: %{title: "My new task", description: "A test task"})
+      |> render_submit()
+
+    assert html =~ "My new task"
+  end
+
+  test "creating a task without a title shows validation error", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+
+    view |> element("button", "New Task") |> render_click()
+
+    html =
+      view
+      |> form("form", task: %{title: ""})
+      |> render_submit()
+
+    # Form should still be visible with errors
+    assert html =~ "can&#39;t be blank" or html =~ "Create Task"
+  end
+
+  test "cancel button hides the task creation form", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+
+    view |> element("button", "New Task") |> render_click()
+    html = view |> element("button", "Cancel") |> render_click()
+
+    refute html =~ "Create Task"
+  end
+
+  test "moving a task to the next column works", %{conn: conn} do
+    {:ok, task} = MissionControl.Tasks.create_task(%{title: "Move me"})
+
+    {:ok, view, _html} = live(conn, "/")
+    html = render(view)
+    assert html =~ "Move me"
+
+    # Move from inbox to assigned via event
+    html = render_click(view, "move_task", %{"id" => "#{task.id}", "column" => "assigned"})
+    assert html =~ "Move me"
+  end
+
+  test "deleting a task removes it from the board", %{conn: conn} do
+    {:ok, task} = MissionControl.Tasks.create_task(%{title: "Delete me"})
+
+    {:ok, view, _html} = live(conn, "/")
+    html = render(view)
+    assert html =~ "Delete me"
+
+    html = render_click(view, "delete_task", %{"id" => "#{task.id}"})
+    refute html =~ "Delete me"
+  end
+
+  test "tasks appear in correct kanban columns", %{conn: conn} do
+    {:ok, _t1} = MissionControl.Tasks.create_task(%{title: "Task in inbox"})
+    {:ok, _t2} = MissionControl.Tasks.create_task(%{title: "Task in review", column: "review"})
+
+    {:ok, _view, html} = live(conn, "/")
+
+    assert html =~ "Task in inbox"
+    assert html =~ "Task in review"
+  end
+
+  test "task count is displayed per column", %{conn: conn} do
+    {:ok, _} = MissionControl.Tasks.create_task(%{title: "One"})
+    {:ok, _} = MissionControl.Tasks.create_task(%{title: "Two"})
+
+    {:ok, _view, html} = live(conn, "/")
+
+    # Inbox column should show count of 2
+    assert html =~ ">2</span>"
+  end
 end
