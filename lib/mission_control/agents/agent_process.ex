@@ -23,6 +23,8 @@ defmodule MissionControl.Agents.AgentProcess do
       [{_pid, _}] -> true
       [] -> false
     end
+  rescue
+    ArgumentError -> false
   end
 
   defp via(agent_id) do

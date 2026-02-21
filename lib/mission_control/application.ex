@@ -16,6 +16,8 @@ defmodule MissionControl.Application do
       {Phoenix.PubSub, name: MissionControl.PubSub},
       {Registry, keys: :unique, name: MissionControl.AgentRegistry},
       MissionControl.Agents.AgentSupervisor,
+      # Reset agents left as "running" from a previous server session
+      {Task, &MissionControl.Agents.reset_stale_agents/0},
       # Start to serve requests, typically the last entry
       MissionControlWeb.Endpoint
     ]

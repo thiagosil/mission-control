@@ -3,6 +3,13 @@ defmodule MissionControl.Agents do
   alias MissionControl.Repo
   alias MissionControl.Agents.{Agent, AgentProcess, AgentSupervisor}
 
+  # --- Startup ---
+
+  def reset_stale_agents do
+    from(a in Agent, where: a.status == "running")
+    |> Repo.update_all(set: [status: "stopped"])
+  end
+
   # --- CRUD ---
 
   def list_agents do
