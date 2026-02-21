@@ -6,7 +6,8 @@ defmodule Mix.Tasks.MissionControl.Start do
 
   @impl true
   def run(args) do
-    Application.put_env(:mission_control, MissionControlWeb.Endpoint, server: true, merge: true)
+    config = Application.get_env(:mission_control, MissionControlWeb.Endpoint, [])
+    Application.put_env(:mission_control, MissionControlWeb.Endpoint, Keyword.put(config, :server, true))
     Mix.Tasks.Phx.Server.run(args)
   end
 end
