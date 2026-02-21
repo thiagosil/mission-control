@@ -10,6 +10,8 @@ defmodule MissionControl.Agents.AgentProcess do
 
   # --- Client API ---
 
+  def default_command, do: @default_command
+
   def start_link(%{id: agent_id} = agent) do
     GenServer.start_link(__MODULE__, agent, name: via(agent_id))
   end
@@ -35,7 +37,9 @@ defmodule MissionControl.Agents.AgentProcess do
 
   @impl true
   def init(agent) do
-    command = Map.get(agent.config || %{}, "command", @default_command)
+    config = agent.config || %{}
+    command = Map.get(config, "command", @default_command)
+    task_id = Map.get(config, "task_id")
 
     port =
       Port.open({:spawn, command}, [
@@ -49,7 +53,8 @@ defmodule MissionControl.Agents.AgentProcess do
      %{
        agent_id: agent.id,
        port: port,
-       buffer: []
+       buffer: [],
+       task_id: task_id
      }}
   end
 
@@ -90,6 +95,8 @@ defmodule MissionControl.Agents.AgentProcess do
         |> MissionControl.Repo.update()
     end
 
+    transition_task_on_exit(state.task_id, exit_status)
+
     Phoenix.PubSub.broadcast(
       MissionControl.PubSub,
       "agents",
@@ -102,4 +109,17 @@ defmodule MissionControl.Agents.AgentProcess do
   def handle_info(_msg, state) do
     {:noreply, state}
   end
+
+  # --- Task auto-transitions ---
+
+  defp transition_task_on_exit(nil, _exit_status), do: :ok
+
+  defp transition_task_on_exit(task_id, 0) do
+    case MissionControl.Tasks.get_task_for_agent_by_id(task_id) do
+      %{column: "in_progress"} = task -> MissionControl.Tasks.move_task(task, "review")
+      _ -> :ok
+    end
+  end
+
+  defp transition_task_on_exit(_task_id, _nonzero), do: :ok
 end

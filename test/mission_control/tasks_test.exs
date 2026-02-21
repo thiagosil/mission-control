@@ -164,6 +164,53 @@ defmodule MissionControl.TasksTest do
     end
   end
 
+  describe "assign_and_start_task/1" do
+    setup do
+      on_exit(fn ->
+        MissionControl.Agents.AgentSupervisor
+        |> DynamicSupervisor.which_children()
+        |> Enum.each(fn {_, pid, _, _} ->
+          DynamicSupervisor.terminate_child(MissionControl.Agents.AgentSupervisor, pid)
+        end)
+      end)
+
+      :ok
+    end
+
+    test "spawns agent, links to task, and moves to in_progress" do
+      {:ok, task} = Tasks.create_task(%{title: "Auto-assign me"})
+      assert {:ok, updated_task, agent} = Tasks.assign_and_start_task(task)
+
+      assert updated_task.column == "in_progress"
+      assert updated_task.agent_id == agent.id
+      assert agent.status == "running"
+      assert agent.name =~ "Agent for:"
+    end
+  end
+
+  describe "get_task_for_agent/1" do
+    test "returns the task assigned to the agent" do
+      {:ok, agent} = MissionControl.Agents.create_agent(%{name: "Test Agent", status: "running"})
+      {:ok, task} = Tasks.create_task(%{title: "Linked task", column: "in_progress"})
+      {:ok, task} = Tasks.update_task(task, %{agent_id: agent.id})
+
+      found = Tasks.get_task_for_agent(agent.id)
+      assert found.id == task.id
+    end
+
+    test "returns nil when no task is assigned" do
+      assert Tasks.get_task_for_agent(999) == nil
+    end
+
+    test "does not return tasks in done column" do
+      {:ok, agent} = MissionControl.Agents.create_agent(%{name: "Test Agent", status: "running"})
+      {:ok, task} = Tasks.create_task(%{title: "Done task", column: "done"})
+      {:ok, _task} = Tasks.update_task(task, %{agent_id: agent.id})
+
+      assert Tasks.get_task_for_agent(agent.id) == nil
+    end
+  end
+
   describe "Task.valid_transition?/2" do
     test "returns true for valid transitions" do
       assert Task.valid_transition?("inbox", "assigned")

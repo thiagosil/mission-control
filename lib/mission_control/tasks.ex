@@ -58,6 +58,33 @@ defmodule MissionControl.Tasks do
     end
   end
 
+  # --- Assignment ---
+
+  def assign_and_start_task(%Task{} = task) do
+    with {:ok, agent} <- MissionControl.Agents.spawn_agent_for_task(task),
+         {:ok, task} <- update_task(task, %{agent_id: agent.id, column: "assigned"}),
+         {:ok, task} <- move_task(task, "in_progress") do
+      {:ok, task, agent}
+    end
+  end
+
+  def assign_task_to_existing_agent(%Task{} = task, agent_id) do
+    with {:ok, task} <- update_task(task, %{agent_id: agent_id, column: "assigned"}),
+         {:ok, task} <- move_task(task, "in_progress") do
+      {:ok, task}
+    end
+  end
+
+  def get_task_for_agent(agent_id) do
+    Task
+    |> where([t], t.agent_id == ^agent_id and t.column in ["assigned", "in_progress"])
+    |> Repo.one()
+  end
+
+  def get_task_for_agent_by_id(task_id) do
+    Repo.get(Task, task_id)
+  end
+
   # --- PubSub ---
 
   def subscribe do

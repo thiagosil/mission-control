@@ -27,7 +27,8 @@ defmodule MissionControlWeb.DashboardLive do
        tasks: tasks,
        columns: @columns,
        show_task_form: false,
-       task_form: to_form(Task.changeset(%Task{}, %{}))
+       task_form: to_form(Task.changeset(%Task{}, %{})),
+       assigning_task_id: nil
      )}
   end
 
@@ -91,12 +92,10 @@ defmodule MissionControlWeb.DashboardLive do
 
   def handle_event("create_task", %{"task" => params}, socket) do
     case Tasks.create_task(params) do
-      {:ok, task} ->
-        tasks = socket.assigns.tasks ++ [task]
-
+      {:ok, _task} ->
         {:noreply,
          socket
-         |> assign(show_task_form: false, tasks: tasks)
+         |> assign(show_task_form: false)
          |> put_flash(:info, "Task created")}
 
       {:error, changeset} ->
@@ -108,11 +107,8 @@ defmodule MissionControlWeb.DashboardLive do
     task = Tasks.get_task!(String.to_integer(id))
 
     case Tasks.move_task(task, column) do
-      {:ok, updated} ->
-        tasks =
-          Enum.map(socket.assigns.tasks, fn t -> if t.id == updated.id, do: updated, else: t end)
-
-        {:noreply, assign(socket, tasks: tasks)}
+      {:ok, _updated} ->
+        {:noreply, socket}
 
       {:error, :invalid_transition} ->
         {:noreply, put_flash(socket, :error, "Invalid transition")}
@@ -126,12 +122,47 @@ defmodule MissionControlWeb.DashboardLive do
     task = Tasks.get_task!(String.to_integer(id))
 
     case Tasks.delete_task(task) do
-      {:ok, deleted} ->
-        tasks = Enum.reject(socket.assigns.tasks, fn t -> t.id == deleted.id end)
-        {:noreply, assign(socket, tasks: tasks)}
+      {:ok, _deleted} ->
+        {:noreply, socket}
 
       {:error, _reason} ->
         {:noreply, put_flash(socket, :error, "Failed to delete task")}
+    end
+  end
+
+  # --- Assignment events ---
+
+  def handle_event("show_assign", %{"id" => id}, socket) do
+    {:noreply, assign(socket, assigning_task_id: String.to_integer(id))}
+  end
+
+  def handle_event("cancel_assign", _params, socket) do
+    {:noreply, assign(socket, assigning_task_id: nil)}
+  end
+
+  def handle_event("assign_new_agent", %{"id" => id}, socket) do
+    task = Tasks.get_task!(String.to_integer(id))
+
+    case Tasks.assign_and_start_task(task) do
+      {:ok, _updated_task, agent} ->
+        socket = assign(socket, assigning_task_id: nil)
+        socket = select_agent(socket, agent.id)
+        {:noreply, socket}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to assign agent")}
+    end
+  end
+
+  def handle_event("assign_agent", %{"id" => id, "agent_id" => agent_id}, socket) do
+    task = Tasks.get_task!(String.to_integer(id))
+
+    case Tasks.assign_task_to_existing_agent(task, String.to_integer(agent_id)) do
+      {:ok, _updated_task} ->
+        {:noreply, assign(socket, assigning_task_id: nil)}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to assign agent")}
     end
   end
 
@@ -149,7 +180,10 @@ defmodule MissionControlWeb.DashboardLive do
         if a.id == agent_id, do: %{a | status: new_status}, else: a
       end)
 
-    socket = assign(socket, agents: agents)
+    # Refresh tasks — agent exit may have auto-transitioned a task
+    tasks = Tasks.list_tasks()
+
+    socket = assign(socket, agents: agents, tasks: tasks)
 
     socket =
       if socket.assigns.selected_agent_id == agent_id do
@@ -244,6 +278,20 @@ defmodule MissionControlWeb.DashboardLive do
   defp selected_agent(_agents, nil), do: nil
   defp selected_agent(agents, id), do: Enum.find(agents, &(&1.id == id))
 
+  defp agent_for_task(_task, _agents, nil), do: nil
+
+  defp agent_for_task(task, agents, _agent_id) do
+    Enum.find(agents, &(&1.id == task.agent_id))
+  end
+
+  defp task_for_agent(agent_id, tasks) do
+    Enum.find(tasks, fn t -> t.agent_id == agent_id end)
+  end
+
+  defp running_agents(agents) do
+    Enum.filter(agents, &(&1.status == "running"))
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -284,14 +332,19 @@ defmodule MissionControlWeb.DashboardLive do
                 <button
                   phx-click="select_agent"
                   phx-value-id={agent.id}
-                  class={"w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer " <>
+                  class={"w-full flex items-start gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer " <>
                     if(@selected_agent_id == agent.id,
                       do: "bg-base-200 text-base-content",
                       else: "text-base-content/60 hover:bg-base-200 hover:text-base-content"
                     )}
                 >
-                  <span class={"w-2 h-2 rounded-full flex-shrink-0 " <> status_color(agent.status)} />
-                  <span class="truncate">{agent.name}</span>
+                  <span class={"w-2 h-2 rounded-full flex-shrink-0 mt-1.5 " <> status_color(agent.status)} />
+                  <span class="flex flex-col min-w-0">
+                    <span class="truncate">{agent.name}</span>
+                    <%= if task = task_for_agent(agent.id, @tasks) do %>
+                      <span class="text-[10px] text-base-content/40 truncate">{task.title}</span>
+                    <% end %>
+                  </span>
                 </button>
               </li>
             </ul>
@@ -373,6 +426,8 @@ defmodule MissionControlWeb.DashboardLive do
               column={col}
               tasks={tasks_for_column(@tasks, col)}
               transitions={next_columns(col)}
+              agents={@agents}
+              assigning_task_id={@assigning_task_id}
             />
           </div>
         </div>
@@ -425,6 +480,8 @@ defmodule MissionControlWeb.DashboardLive do
   attr :column, :string, required: true
   attr :tasks, :list, default: []
   attr :transitions, :list, default: []
+  attr :agents, :list, default: []
+  attr :assigning_task_id, :integer, default: nil
 
   defp kanban_column(assigns) do
     ~H"""
@@ -437,7 +494,13 @@ defmodule MissionControlWeb.DashboardLive do
         <%= if @tasks == [] do %>
           <p class="text-xs text-base-content/30 text-center mt-4">No tasks</p>
         <% else %>
-          <.task_card :for={task <- @tasks} task={task} transitions={@transitions} />
+          <.task_card
+            :for={task <- @tasks}
+            task={task}
+            transitions={@transitions}
+            agents={@agents}
+            assigning_task_id={@assigning_task_id}
+          />
         <% end %>
       </div>
     </div>
@@ -446,8 +509,13 @@ defmodule MissionControlWeb.DashboardLive do
 
   attr :task, :map, required: true
   attr :transitions, :list, default: []
+  attr :agents, :list, default: []
+  attr :assigning_task_id, :integer, default: nil
 
   defp task_card(assigns) do
+    assigns =
+      assign(assigns, :agent, agent_for_task(assigns.task, assigns.agents, assigns.task.agent_id))
+
     ~H"""
     <div class="bg-base-100 rounded-lg border border-base-300 p-2.5 shadow-sm group">
       <div class="flex items-start justify-between gap-1">
@@ -463,6 +531,51 @@ defmodule MissionControlWeb.DashboardLive do
       </div>
       <%= if @task.description && @task.description != "" do %>
         <p class="text-[11px] text-base-content/40 mt-1 line-clamp-2">{@task.description}</p>
+      <% end %>
+      <%!-- Agent badge --%>
+      <%= if @agent do %>
+        <div class="flex items-center gap-1.5 mt-1.5">
+          <span class={"w-1.5 h-1.5 rounded-full " <> status_color(@agent.status)} />
+          <span class="text-[10px] text-base-content/50 truncate">{@agent.name}</span>
+        </div>
+      <% end %>
+      <%!-- Assign agent button (inbox tasks without agent) --%>
+      <%= if @task.column == "inbox" && !@task.agent_id do %>
+        <%= if @assigning_task_id == @task.id do %>
+          <div class="mt-2 space-y-1">
+            <button
+              phx-click="assign_new_agent"
+              phx-value-id={@task.id}
+              class="w-full text-[10px] px-1.5 py-1 rounded bg-primary/10 text-primary hover:bg-primary/20 transition-colors cursor-pointer text-left"
+            >
+              Spawn New Agent
+            </button>
+            <%= for agent <- running_agents(@agents) do %>
+              <button
+                phx-click="assign_agent"
+                phx-value-id={@task.id}
+                phx-value-agent_id={agent.id}
+                class="w-full text-[10px] px-1.5 py-1 rounded bg-base-200 text-base-content/50 hover:bg-base-300 hover:text-base-content/70 transition-colors cursor-pointer text-left truncate"
+              >
+                {agent.name}
+              </button>
+            <% end %>
+            <button
+              phx-click="cancel_assign"
+              class="w-full text-[10px] px-1.5 py-0.5 text-base-content/30 hover:text-base-content/50 transition-colors cursor-pointer"
+            >
+              Cancel
+            </button>
+          </div>
+        <% else %>
+          <button
+            phx-click="show_assign"
+            phx-value-id={@task.id}
+            class="mt-2 text-[10px] px-1.5 py-0.5 rounded bg-base-200 text-base-content/40 hover:text-base-content/70 hover:bg-base-300 transition-colors cursor-pointer"
+          >
+            Assign Agent
+          </button>
+        <% end %>
       <% end %>
       <%= if @transitions != [] do %>
         <div class="flex gap-1 mt-2">

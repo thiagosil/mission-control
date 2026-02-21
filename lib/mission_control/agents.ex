@@ -65,6 +65,25 @@ defmodule MissionControl.Agents do
 
   def agent_alive?(agent_id), do: AgentProcess.alive?(agent_id)
 
+  # --- Task integration ---
+
+  def spawn_agent_for_task(task) do
+    prompt = build_task_prompt(task)
+    command = AgentProcess.default_command()
+
+    attrs = %{
+      name: "Agent for: #{String.slice(task.title, 0, 40)}",
+      config: %{"command" => command, "task_id" => task.id, "prompt" => prompt}
+    }
+
+    spawn_agent(attrs)
+  end
+
+  defp build_task_prompt(task) do
+    desc = if task.description, do: "\n\n#{task.description}", else: ""
+    "Task: #{task.title}#{desc}"
+  end
+
   # --- PubSub ---
 
   def subscribe do
