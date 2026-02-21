@@ -73,4 +73,46 @@ defmodule MissionControl.Agents.AgentProcessTest do
 
     assert_receive {:agent_exited, _, "crashed"}, 2000
   end
+
+  test "task auto-moves to review on exit code 0" do
+    {:ok, task} =
+      MissionControl.Tasks.create_task(%{title: "Auto-review", column: "in_progress"})
+
+    {:ok, agent} = Agents.create_agent(%{name: "Task Agent", status: "running"})
+
+    {:ok, _} =
+      MissionControl.Tasks.update_task(task, %{agent_id: agent.id})
+
+    {:ok, _pid} =
+      MissionControl.Agents.AgentSupervisor.start_agent(%{
+        agent
+        | config: %{"command" => "echo done", "task_id" => task.id}
+      })
+
+    Process.sleep(1000)
+
+    updated_task = MissionControl.Tasks.get_task!(task.id)
+    assert updated_task.column == "review"
+  end
+
+  test "task stays in in_progress on non-zero exit" do
+    {:ok, task} =
+      MissionControl.Tasks.create_task(%{title: "Stay put", column: "in_progress"})
+
+    {:ok, agent} = Agents.create_agent(%{name: "Fail Agent", status: "running"})
+
+    {:ok, _} =
+      MissionControl.Tasks.update_task(task, %{agent_id: agent.id})
+
+    {:ok, _pid} =
+      MissionControl.Agents.AgentSupervisor.start_agent(%{
+        agent
+        | config: %{"command" => "exit 1", "task_id" => task.id}
+      })
+
+    Process.sleep(1000)
+
+    updated_task = MissionControl.Tasks.get_task!(task.id)
+    assert updated_task.column == "in_progress"
+  end
 end

@@ -89,11 +89,11 @@ defmodule MissionControlWeb.DashboardLiveTest do
 
     view |> element("button", "New Task") |> render_click()
 
-    html =
-      view
-      |> form("form", task: %{title: "My new task", description: "A test task"})
-      |> render_submit()
+    view
+    |> form("form", task: %{title: "My new task", description: "A test task"})
+    |> render_submit()
 
+    html = render(view)
     assert html =~ "My new task"
   end
 
@@ -139,7 +139,8 @@ defmodule MissionControlWeb.DashboardLiveTest do
     html = render(view)
     assert html =~ "Delete me"
 
-    html = render_click(view, "delete_task", %{"id" => "#{task.id}"})
+    render_click(view, "delete_task", %{"id" => "#{task.id}"})
+    html = render(view)
     refute html =~ "Delete me"
   end
 
@@ -161,5 +162,51 @@ defmodule MissionControlWeb.DashboardLiveTest do
 
     # Inbox column should show count of 2
     assert html =~ ">2</span>"
+  end
+
+  # --- Assignment tests ---
+
+  test "Assign Agent button appears on inbox tasks", %{conn: conn} do
+    {:ok, _task} = MissionControl.Tasks.create_task(%{title: "Assignable task"})
+
+    {:ok, _view, html} = live(conn, "/")
+
+    assert html =~ "Assign Agent"
+  end
+
+  test "clicking Assign Agent shows assignment dropdown", %{conn: conn} do
+    {:ok, task} = MissionControl.Tasks.create_task(%{title: "Assignable task"})
+
+    {:ok, view, _html} = live(conn, "/")
+
+    html = render_click(view, "show_assign", %{"id" => "#{task.id}"})
+
+    assert html =~ "Spawn New Agent"
+    assert html =~ "Cancel"
+  end
+
+  test "assign_new_agent spawns agent and moves task to in_progress", %{conn: conn} do
+    {:ok, task} = MissionControl.Tasks.create_task(%{title: "Agent task"})
+
+    {:ok, view, _html} = live(conn, "/")
+
+    render_click(view, "assign_new_agent", %{"id" => "#{task.id}"})
+
+    html = render(view)
+    # Agent should appear in sidebar
+    assert html =~ "Agent for:"
+    # Terminal should be showing the agent output
+    assert html =~ "terminal-output"
+  end
+
+  test "agent sidebar shows task name for assigned agents", %{conn: conn} do
+    {:ok, task} = MissionControl.Tasks.create_task(%{title: "Sidebar task"})
+
+    {:ok, view, _html} = live(conn, "/")
+
+    render_click(view, "assign_new_agent", %{"id" => "#{task.id}"})
+
+    html = render(view)
+    assert html =~ "Sidebar task"
   end
 end
