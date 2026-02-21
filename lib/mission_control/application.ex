@@ -14,8 +14,8 @@ defmodule MissionControl.Application do
        repos: Application.fetch_env!(:mission_control, :ecto_repos), skip: skip_migrations?()},
       {DNSCluster, query: Application.get_env(:mission_control, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: MissionControl.PubSub},
-      # Start a worker by calling: MissionControl.Worker.start_link(arg)
-      # {MissionControl.Worker, arg},
+      {Registry, keys: :unique, name: MissionControl.AgentRegistry},
+      MissionControl.Agents.AgentSupervisor,
       # Start to serve requests, typically the last entry
       MissionControlWeb.Endpoint
     ]
