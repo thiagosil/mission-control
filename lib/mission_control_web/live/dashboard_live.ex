@@ -36,8 +36,25 @@ defmodule MissionControlWeb.DashboardLive do
   end
 
   def handle_event("stop_agent", %{"id" => id}, socket) do
-    Agents.stop_agent(String.to_integer(id))
-    {:noreply, socket}
+    agent_id = String.to_integer(id)
+
+    case Agents.stop_agent(agent_id) do
+      {:ok, agent} ->
+        agents = update_agent_in_list(socket.assigns.agents, agent)
+        socket = assign(socket, agents: agents)
+
+        socket =
+          if socket.assigns.selected_agent_id == agent_id do
+            assign(socket, terminal_status: "stopped")
+          else
+            socket
+          end
+
+        {:noreply, socket}
+
+      {:error, _reason} ->
+        {:noreply, socket}
+    end
   end
 
   def handle_event("select_agent", %{"id" => id}, socket) do

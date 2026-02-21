@@ -20,5 +20,7 @@ defmodule MissionControl.Agents.AgentSupervisor do
       [{pid, _}] -> DynamicSupervisor.terminate_child(__MODULE__, pid)
       [] -> {:error, :not_running}
     end
+  rescue
+    ArgumentError -> {:error, :not_running}
   end
 end
