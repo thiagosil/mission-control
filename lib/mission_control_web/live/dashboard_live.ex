@@ -77,6 +77,21 @@ defmodule MissionControlWeb.DashboardLive do
     end
   end
 
+  def handle_event("restart_agent", %{"id" => id}, socket) do
+    agent_id = String.to_integer(id)
+
+    case Agents.restart_agent(agent_id) do
+      {:ok, agent} ->
+        agents = update_agent_in_list(socket.assigns.agents, agent)
+        socket = assign(socket, agents: agents)
+        socket = select_agent(socket, agent.id)
+        {:noreply, socket}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to restart agent")}
+    end
+  end
+
   def handle_event("select_agent", %{"id" => id}, socket) do
     {:noreply, select_agent(socket, String.to_integer(id))}
   end
@@ -221,6 +236,19 @@ defmodule MissionControlWeb.DashboardLive do
         socket
       end
 
+    socket =
+      if new_status == "crashed" do
+        agent_name =
+          case Enum.find(agents, &(&1.id == agent_id)) do
+            %{name: name} -> name
+            _ -> "##{agent_id}"
+          end
+
+        put_flash(socket, :error, "Agent \"#{agent_name}\" crashed")
+      else
+        socket
+      end
+
     {:noreply, socket}
   end
 
@@ -348,6 +376,7 @@ defmodule MissionControlWeb.DashboardLive do
   end
 
   defp event_dot_color("agent_spawned"), do: "bg-success"
+  defp event_dot_color("agent_restarted"), do: "bg-success"
   defp event_dot_color("agent_stopped"), do: "bg-base-content/30"
   defp event_dot_color("agent_exited"), do: "bg-warning"
   defp event_dot_color("task_created"), do: "bg-info"
@@ -400,29 +429,50 @@ defmodule MissionControlWeb.DashboardLive do
             <p class="text-sm text-base-content/40 px-3 mt-2">No agents running</p>
           <% else %>
             <ul class="space-y-0.5">
-              <li :for={agent <- @agents}>
-                <button
-                  phx-click="select_agent"
-                  phx-value-id={agent.id}
-                  class={"w-full flex items-start gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer " <>
+              <li :for={agent <- @agents} class="group/agent">
+                <div class={"w-full flex items-start gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer " <>
                     if(@selected_agent_id == agent.id,
                       do: "bg-base-200 text-base-content",
                       else: "text-base-content/60 hover:bg-base-200 hover:text-base-content"
-                    )}
-                >
-                  <span class={"w-2 h-2 rounded-full flex-shrink-0 mt-1.5 " <> status_color(agent.status)} />
-                  <span class="flex flex-col min-w-0">
-                    <span class="truncate">{agent.name}</span>
-                    <%= if task = task_for_agent(agent.id, @tasks) do %>
-                      <span class="text-[10px] text-base-content/40 truncate">{task.title}</span>
-                      <%= if task.branch_name do %>
-                        <span class="text-[10px] font-mono text-base-content/30 truncate">
-                          {task.branch_name}
-                        </span>
+                    )}>
+                  <button
+                    phx-click="select_agent"
+                    phx-value-id={agent.id}
+                    class="flex items-start gap-2.5 min-w-0 flex-1 cursor-pointer"
+                  >
+                    <span class={"w-2 h-2 rounded-full flex-shrink-0 mt-1.5 " <> status_color(agent.status)} />
+                    <span class="flex flex-col min-w-0">
+                      <span class="truncate">{agent.name}</span>
+                      <%= if task = task_for_agent(agent.id, @tasks) do %>
+                        <span class="text-[10px] text-base-content/40 truncate">{task.title}</span>
+                        <%= if task.branch_name do %>
+                          <span class="text-[10px] font-mono text-base-content/30 truncate">
+                            {task.branch_name}
+                          </span>
+                        <% end %>
                       <% end %>
-                    <% end %>
-                  </span>
-                </button>
+                    </span>
+                  </button>
+                  <%= if agent.status == "running" do %>
+                    <button
+                      phx-click="stop_agent"
+                      phx-value-id={agent.id}
+                      class="opacity-0 group-hover/agent:opacity-100 p-0.5 rounded text-base-content/30 hover:text-error transition-all cursor-pointer flex-shrink-0 mt-0.5"
+                      title="Stop agent"
+                    >
+                      <.icon name="hero-stop-micro" class="size-3.5" />
+                    </button>
+                  <% else %>
+                    <button
+                      phx-click="restart_agent"
+                      phx-value-id={agent.id}
+                      class="opacity-0 group-hover/agent:opacity-100 p-0.5 rounded text-base-content/30 hover:text-success transition-all cursor-pointer flex-shrink-0 mt-0.5"
+                      title="Restart agent"
+                    >
+                      <.icon name="hero-arrow-path-micro" class="size-3.5" />
+                    </button>
+                  <% end %>
+                </div>
               </li>
             </ul>
           <% end %>
