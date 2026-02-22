@@ -49,6 +49,34 @@ defmodule MissionControl.Agents do
     end
   end
 
+  def restart_agent(agent_id) do
+    agent = get_agent!(agent_id)
+
+    if agent.status == "running" do
+      {:error, :already_running}
+    else
+      {:ok, agent} = update_agent(agent, %{status: "running"})
+
+      case AgentSupervisor.start_agent(agent) do
+        {:ok, _pid} ->
+          broadcast_agent_change(agent)
+
+          Activity.append(%{
+            type: "agent_restarted",
+            agent_id: agent.id,
+            task_id: agent.config["task_id"],
+            message: "Agent \"#{agent.name}\" restarted"
+          })
+
+          {:ok, agent}
+
+        {:error, reason} ->
+          update_agent(agent, %{status: "stopped"})
+          {:error, reason}
+      end
+    end
+  end
+
   def stop_agent(agent_id) do
     case AgentSupervisor.stop_agent(agent_id) do
       :ok ->

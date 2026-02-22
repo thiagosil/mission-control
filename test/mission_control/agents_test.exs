@@ -47,6 +47,38 @@ defmodule MissionControl.AgentsTest do
     refute Agents.agent_alive?(agent.id)
   end
 
+  test "restart_agent/1 re-spawns a stopped agent" do
+    {:ok, agent} = Agents.spawn_agent(%{config: %{"command" => "sleep 10"}})
+    assert {:ok, _} = Agents.stop_agent(agent.id)
+    refute Agents.agent_alive?(agent.id)
+
+    assert {:ok, restarted} = Agents.restart_agent(agent.id)
+    assert restarted.status == "running"
+    assert restarted.id == agent.id
+    assert Agents.agent_alive?(agent.id)
+  end
+
+  test "restart_agent/1 re-spawns a crashed agent" do
+    Agents.subscribe()
+    {:ok, agent} = Agents.spawn_agent(%{config: %{"command" => "exit 1"}})
+
+    # Wait for the process to crash and fully terminate
+    assert_receive {:agent_exited, _, "crashed"}, 2000
+    Process.sleep(50)
+    refute Agents.agent_alive?(agent.id)
+
+    assert {:ok, restarted} = Agents.restart_agent(agent.id)
+    assert restarted.status == "running"
+    assert Agents.agent_alive?(agent.id)
+  end
+
+  test "restart_agent/1 on an already-running agent returns error" do
+    {:ok, agent} = Agents.spawn_agent(%{config: %{"command" => "sleep 10"}})
+    assert Agents.agent_alive?(agent.id)
+
+    assert {:error, :already_running} = Agents.restart_agent(agent.id)
+  end
+
   test "get_buffer/1 returns captured output lines" do
     Agents.subscribe()
     {:ok, agent} = Agents.spawn_agent(%{config: %{"command" => "echo hello && echo world"}})

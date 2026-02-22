@@ -213,6 +213,62 @@ defmodule MissionControlWeb.DashboardLiveTest do
     assert html =~ "Sidebar task"
   end
 
+  # --- Lifecycle button tests ---
+
+  test "stop button visible on running agents in sidebar", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+
+    # Spawn a long-running agent
+    render_click(view, "spawn_agent", %{})
+
+    html = render(view)
+    assert html =~ "hero-stop-micro"
+  end
+
+  test "restart button visible on stopped agents in sidebar", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+
+    # Spawn and wait for it to exit (default test command finishes quickly)
+    render_click(view, "spawn_agent", %{})
+    Process.sleep(500)
+
+    html = render(view)
+    assert html =~ "hero-arrow-path-micro"
+  end
+
+  test "clicking restart on a stopped agent restarts it", %{conn: conn} do
+    {:ok, agent} = MissionControl.Agents.spawn_agent(%{config: %{"command" => "echo done"}})
+
+    # Subscribe to know when it exits
+    MissionControl.Agents.subscribe()
+    assert_receive {:agent_exited, _, _}, 2000
+
+    {:ok, view, _html} = live(conn, "/")
+
+    # Click restart
+    html = render_click(view, "restart_agent", %{"id" => "#{agent.id}"})
+
+    # Agent should be running again (green dot)
+    assert html =~ "bg-success"
+  end
+
+  test "crash notification appears as flash message", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+
+    # Spawn an agent that will crash
+    {:ok, agent} =
+      MissionControl.Agents.spawn_agent(%{config: %{"command" => "exit 1"}})
+
+    # Select the agent so we're watching it
+    render_click(view, "select_agent", %{"id" => "#{agent.id}"})
+
+    # Wait for the crash
+    Process.sleep(500)
+
+    html = render(view)
+    assert html =~ "crashed"
+  end
+
   # --- Activity feed tests ---
 
   test "Activity tab is rendered in the right panel", %{conn: conn} do
