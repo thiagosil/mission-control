@@ -2,7 +2,7 @@ defmodule MissionControl.Activity.Event do
   use Ecto.Schema
   import Ecto.Changeset
 
-  @valid_types ~w(agent_spawned agent_stopped agent_restarted agent_exited task_created task_updated task_deleted task_assigned)
+  @valid_types ~w(agent_spawned agent_stopped agent_restarted agent_exited task_created task_updated task_deleted task_assigned orchestrator_started orchestrator_completed orchestrator_failed)
 
   schema "events" do
     field :type, :string

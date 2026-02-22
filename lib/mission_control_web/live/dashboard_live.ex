@@ -3,6 +3,7 @@ defmodule MissionControlWeb.DashboardLive do
 
   alias MissionControl.Activity
   alias MissionControl.Agents
+  alias MissionControl.Orchestrator
   alias MissionControl.Tasks
   alias MissionControl.Tasks.Task
 
@@ -35,7 +36,13 @@ defmodule MissionControlWeb.DashboardLive do
        events: events,
        right_panel: "terminal",
        event_filter_type: nil,
-       event_filter_agent_id: nil
+       event_filter_agent_id: nil,
+       show_goal_form: false,
+       orchestrator_agent_id: nil,
+       orchestrator_output: "",
+       orchestrator_status: nil,
+       orchestrator_proposals: [],
+       orchestrator_goal: nil
      )}
   end
 
@@ -194,6 +201,97 @@ defmodule MissionControlWeb.DashboardLive do
     {:noreply, assign(socket, right_panel: panel)}
   end
 
+  # --- Orchestrator events ---
+
+  def handle_event("show_goal_form", _params, socket) do
+    {:noreply, assign(socket, show_goal_form: true)}
+  end
+
+  def handle_event("cancel_goal_form", _params, socket) do
+    {:noreply, assign(socket, show_goal_form: false)}
+  end
+
+  def handle_event("decompose_goal", %{"goal" => goal_text}, socket) do
+    goal_text = String.trim(goal_text)
+
+    if goal_text == "" do
+      {:noreply, put_flash(socket, :error, "Goal cannot be empty")}
+    else
+      command = Orchestrator.build_command(goal_text)
+
+      case Agents.spawn_agent(%{
+             name: "Orchestrator",
+             config: %{"command" => command, "orchestrator" => true}
+           }) do
+        {:ok, agent} ->
+          if connected?(socket) do
+            Agents.subscribe_to_output(agent.id)
+          end
+
+          Activity.append(%{
+            type: "orchestrator_started",
+            agent_id: agent.id,
+            message: "Orchestrator started for goal: #{String.slice(goal_text, 0, 80)}"
+          })
+
+          agents = update_agent_in_list(socket.assigns.agents, agent)
+
+          {:noreply,
+           assign(socket,
+             show_goal_form: false,
+             orchestrator_agent_id: agent.id,
+             orchestrator_output: "",
+             orchestrator_status: "running",
+             orchestrator_proposals: [],
+             orchestrator_goal: goal_text,
+             agents: agents
+           )}
+
+        {:error, _reason} ->
+          {:noreply, put_flash(socket, :error, "Failed to spawn orchestrator agent")}
+      end
+    end
+  end
+
+  def handle_event("approve_plan", _params, socket) do
+    {:ok, _tasks} = Orchestrator.approve_plan(socket.assigns.orchestrator_proposals)
+
+    Activity.append(%{
+      type: "orchestrator_completed",
+      agent_id: socket.assigns.orchestrator_agent_id,
+      message:
+        "Orchestrator plan approved — #{length(socket.assigns.orchestrator_proposals)} tasks created"
+    })
+
+    {:noreply,
+     socket
+     |> assign(
+       orchestrator_status: nil,
+       orchestrator_proposals: [],
+       orchestrator_agent_id: nil,
+       orchestrator_output: "",
+       orchestrator_goal: nil
+     )
+     |> put_flash(:info, "Plan approved — tasks created")}
+  end
+
+  def handle_event("reject_plan", _params, socket) do
+    {:noreply,
+     assign(socket,
+       orchestrator_status: nil,
+       orchestrator_proposals: [],
+       orchestrator_agent_id: nil,
+       orchestrator_output: "",
+       orchestrator_goal: nil
+     )}
+  end
+
+  def handle_event("remove_proposal", %{"index" => index}, socket) do
+    idx = String.to_integer(index)
+    proposals = List.delete_at(socket.assigns.orchestrator_proposals, idx)
+    {:noreply, assign(socket, orchestrator_proposals: proposals)}
+  end
+
   def handle_event("filter_events", params, socket) do
     type = if params["type"] == "", do: nil, else: params["type"]
 
@@ -237,7 +335,14 @@ defmodule MissionControlWeb.DashboardLive do
       end
 
     socket =
-      if new_status == "crashed" do
+      if socket.assigns.orchestrator_agent_id == agent_id do
+        handle_orchestrator_exit(socket)
+      else
+        socket
+      end
+
+    socket =
+      if new_status == "crashed" and socket.assigns.orchestrator_agent_id != agent_id do
         agent_name =
           case Enum.find(agents, &(&1.id == agent_id)) do
             %{name: name} -> name
@@ -253,11 +358,21 @@ defmodule MissionControlWeb.DashboardLive do
   end
 
   def handle_info({:output, agent_id, line}, socket) do
-    if socket.assigns.selected_agent_id == agent_id do
-      {:noreply, assign(socket, terminal_lines: socket.assigns.terminal_lines ++ [line])}
-    else
-      {:noreply, socket}
-    end
+    socket =
+      if socket.assigns.selected_agent_id == agent_id do
+        assign(socket, terminal_lines: socket.assigns.terminal_lines ++ [line])
+      else
+        socket
+      end
+
+    socket =
+      if socket.assigns.orchestrator_agent_id == agent_id do
+        assign(socket, orchestrator_output: socket.assigns.orchestrator_output <> line <> "\n")
+      else
+        socket
+      end
+
+    {:noreply, socket}
   end
 
   def handle_info({:task_created, task}, socket) do
@@ -287,6 +402,28 @@ defmodule MissionControlWeb.DashboardLive do
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   # --- Helpers ---
+
+  defp handle_orchestrator_exit(socket) do
+    case Orchestrator.parse_proposals(socket.assigns.orchestrator_output) do
+      {:ok, proposals} ->
+        Activity.append(%{
+          type: "orchestrator_completed",
+          agent_id: socket.assigns.orchestrator_agent_id,
+          message: "Orchestrator produced #{length(proposals)} task proposals"
+        })
+
+        assign(socket, orchestrator_status: "completed", orchestrator_proposals: proposals)
+
+      {:error, reason} ->
+        Activity.append(%{
+          type: "orchestrator_failed",
+          agent_id: socket.assigns.orchestrator_agent_id,
+          message: "Orchestrator failed: #{reason}"
+        })
+
+        assign(socket, orchestrator_status: "failed")
+    end
+  end
 
   defp select_agent(socket, agent_id) do
     if socket.assigns.selected_agent_id do
@@ -383,6 +520,9 @@ defmodule MissionControlWeb.DashboardLive do
   defp event_dot_color("task_updated"), do: "bg-primary"
   defp event_dot_color("task_deleted"), do: "bg-error"
   defp event_dot_color("task_assigned"), do: "bg-accent"
+  defp event_dot_color("orchestrator_started"), do: "bg-info"
+  defp event_dot_color("orchestrator_completed"), do: "bg-success"
+  defp event_dot_color("orchestrator_failed"), do: "bg-error"
   defp event_dot_color(_), do: "bg-base-content/30"
 
   defp format_event_time(datetime) do
@@ -492,12 +632,20 @@ defmodule MissionControlWeb.DashboardLive do
       <main class="flex-1 flex flex-col overflow-hidden">
         <div class="px-5 py-4 border-b border-base-300 bg-base-100 flex items-center justify-between">
           <h2 class="text-sm font-semibold text-base-content tracking-tight">Task Board</h2>
-          <button
-            phx-click="show_task_form"
-            class="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-primary text-primary-content text-xs font-medium hover:bg-primary/90 transition-colors cursor-pointer"
-          >
-            <.icon name="hero-plus-micro" class="size-3.5" /> New Task
-          </button>
+          <div class="flex items-center gap-2">
+            <button
+              phx-click="show_goal_form"
+              class="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-secondary text-secondary-content text-xs font-medium hover:bg-secondary/90 transition-colors cursor-pointer"
+            >
+              <.icon name="hero-sparkles-micro" class="size-3.5" /> Decompose Goal
+            </button>
+            <button
+              phx-click="show_task_form"
+              class="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-primary text-primary-content text-xs font-medium hover:bg-primary/90 transition-colors cursor-pointer"
+            >
+              <.icon name="hero-plus-micro" class="size-3.5" /> New Task
+            </button>
+          </div>
         </div>
 
         <%!-- Task creation modal --%>
@@ -541,6 +689,119 @@ defmodule MissionControlWeb.DashboardLive do
                   <button type="submit" class="btn btn-primary btn-sm">Create</button>
                 </div>
               </.form>
+            </div>
+          </div>
+        <% end %>
+
+        <%!-- Goal decomposition modal --%>
+        <%= if @show_goal_form do %>
+          <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div class="bg-base-100 rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
+              <h3 class="text-sm font-semibold text-base-content mb-4">Decompose Goal</h3>
+              <form phx-submit="decompose_goal" class="space-y-4">
+                <div>
+                  <label class="text-xs font-medium text-base-content/60 mb-1 block">
+                    High-level Goal
+                  </label>
+                  <textarea
+                    name="goal"
+                    placeholder="e.g. Add user authentication with JWT"
+                    rows="3"
+                    class="textarea textarea-bordered textarea-sm w-full"
+                    required
+                  ></textarea>
+                </div>
+                <div class="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    phx-click="cancel_goal_form"
+                    class="btn btn-ghost btn-sm"
+                  >
+                    Cancel
+                  </button>
+                  <button type="submit" class="btn btn-secondary btn-sm">Decompose</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        <% end %>
+
+        <%!-- Orchestrator running indicator --%>
+        <%= if @orchestrator_status == "running" do %>
+          <div class="px-5 py-2 bg-info/10 border-b border-info/20 flex items-center gap-2">
+            <span class="loading loading-spinner loading-xs text-info"></span>
+            <span class="text-xs text-info">
+              Orchestrator is decomposing your goal…
+            </span>
+          </div>
+        <% end %>
+
+        <%!-- Orchestrator review modal --%>
+        <%= if @orchestrator_status == "completed" and @orchestrator_proposals != [] do %>
+          <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div class="bg-base-100 rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 max-h-[80vh] flex flex-col">
+              <h3 class="text-sm font-semibold text-base-content mb-1">Review Proposed Tasks</h3>
+              <p class="text-xs text-base-content/50 mb-4">
+                Goal: {@orchestrator_goal}
+              </p>
+              <div class="flex-1 overflow-y-auto space-y-2 mb-4">
+                <div
+                  :for={{proposal, idx} <- Enum.with_index(@orchestrator_proposals)}
+                  class="bg-base-200 rounded-lg p-3 relative group"
+                >
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="flex-1 min-w-0">
+                      <p class="text-xs font-medium text-base-content">
+                        {idx + 1}. {proposal["title"]}
+                      </p>
+                      <p class="text-[11px] text-base-content/50 mt-1">
+                        {proposal["description"]}
+                      </p>
+                      <%= if proposal["dependencies"] != [] do %>
+                        <p class="text-[10px] text-base-content/30 mt-1">
+                          Depends on: {Enum.map(proposal["dependencies"], &(&1 + 1))
+                          |> Enum.join(", ")}
+                        </p>
+                      <% end %>
+                    </div>
+                    <button
+                      phx-click="remove_proposal"
+                      phx-value-index={idx}
+                      class="opacity-0 group-hover:opacity-100 p-0.5 rounded text-base-content/30 hover:text-error transition-all cursor-pointer flex-shrink-0"
+                    >
+                      <.icon name="hero-x-mark-micro" class="size-3" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div class="flex justify-end gap-2">
+                <button phx-click="reject_plan" class="btn btn-ghost btn-sm">Reject</button>
+                <button phx-click="approve_plan" class="btn btn-primary btn-sm">
+                  Approve All ({length(@orchestrator_proposals)})
+                </button>
+              </div>
+            </div>
+          </div>
+        <% end %>
+
+        <%!-- Orchestrator error modal --%>
+        <%= if @orchestrator_status == "failed" do %>
+          <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div class="bg-base-100 rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
+              <h3 class="text-sm font-semibold text-error mb-2">Decomposition Failed</h3>
+              <p class="text-xs text-base-content/60 mb-3">
+                Could not parse the orchestrator output as valid task proposals.
+              </p>
+              <details class="mb-4">
+                <summary class="text-xs text-base-content/40 cursor-pointer">Raw output</summary>
+                <pre class="mt-2 p-2 bg-base-200 rounded text-[11px] text-base-content/60 overflow-auto max-h-40 whitespace-pre-wrap">{@orchestrator_output}</pre>
+              </details>
+              <div class="flex justify-end gap-2">
+                <button phx-click="reject_plan" class="btn btn-ghost btn-sm">Dismiss</button>
+                <button phx-click="show_goal_form" class="btn btn-secondary btn-sm">
+                  Retry
+                </button>
+              </div>
             </div>
           </div>
         <% end %>
