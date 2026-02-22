@@ -1,5 +1,25 @@
 # Mission Control — Product Requirements Document
 
+## Implementation Status
+
+V1 is **complete**. All 11 planned GitHub issues have been implemented and merged:
+
+| # | Issue | Status |
+|---|-------|--------|
+| 1 | Phoenix Bootstrap + Static Dashboard Shell | Done |
+| 2 | Spawn & Stream a Single Agent | Done |
+| 3 | Task CRUD + Kanban Board | Done |
+| 4 | Assign Task to Agent + Auto State Transitions | Done |
+| 5 | Git Branch-per-Task | Done |
+| 6 | Activity Feed | Done |
+| 7 | Agent Lifecycle Management (Stop, Restart, Failures) | Done |
+| 8 | Goal Decomposition (Orchestrator) | Done |
+| 9 | Task Dependencies | Done |
+| 10 | Dashboard Header, Tags, Priority & Panel Controls | Done |
+| 11 | Configurable Agent Backend | Done |
+
+All user stories from 1–28 below are addressed by the implementation. See the "Out of Scope" section for items deferred to future versions.
+
 ## Problem Statement
 
 Running multiple AI coding agents (Claude Code, Codex, etc.) today is a manual, fragmented experience. You open multiple terminal tabs, copy-paste context between them, manually track what each agent is working on, and lose visibility into the overall progress of a multi-agent workflow. There is no unified way to spawn agents, assign tasks, monitor their real-time output, and coordinate their work — especially when agents need to produce work that feeds into other agents' tasks.
@@ -154,21 +174,32 @@ Tests should verify **external behavior**, not implementation details. A good te
 ### Test Approach
 Use ExUnit with `Ecto.Adapters.SQL.Sandbox` for database tests. For agent subprocess tests, use mock scripts (simple bash scripts) instead of actual Claude CLI to keep tests fast and deterministic.
 
-## Out of Scope
+## Out of Scope (V1)
 
 - **Multi-user / authentication** — Mission Control is a single-user, locally-run tool. No login, sessions, or access control.
 - **Cloud deployment** — No remote access, no hosting, no SaaS mode. Runs exclusively on `localhost`.
 - **Agent memory / learning** — No persistent memory across sessions. Each agent starts fresh. Context is passed via task descriptions and git state.
 - **Multi-repo support** — V1 is scoped to a single git repository.
-- **Drag-and-drop kanban** — V1 uses dropdown/button-based column changes. Drag-and-drop is a future polish item.
+- **Drag-and-drop kanban** — V1 uses button-based column changes. Drag-and-drop is a future polish item.
 - **Agent-to-agent direct messaging** — Agents communicate only through task state. No chat between agents.
-- **Cost tracking / token usage** — No tracking of API costs or token consumption in V1.
+- **Cost tracking / token usage** — No tracking of API costs or token consumption.
 - **Mobile or responsive UI** — Desktop browser only.
+- **Panel resizing** — Terminal panel can be toggled open/closed but not resized via drag.
 
 ## Further Notes
 
 - The project name "Mission Control" may conflict with existing tools. Consider alternatives if publishing to Hex.
-- The HTML mockup at `~/Downloads/mission-control.html` serves as design inspiration for a future, more polished UI iteration. V1 starts simpler with a functional three-panel layout (agents | tasks | terminal).
 - Antfarm (antfarm.cool) is a reference for workflow orchestration patterns but uses a fundamentally different architecture (YAML workflows, cron scheduling). Mission Control prioritizes real-time visual monitoring over declarative workflow definitions.
 - Since agents run in auto-accept mode, the user should be aware of security implications — agents can modify files, run commands, and make git changes without confirmation.
-- Future versions could support: agent templates/presets, workflow recording/replay, integration with GitHub Issues/PRs, cost tracking, and multi-repo support.
+
+## Future Work
+
+Potential enhancements for future versions:
+- Drag-and-drop kanban columns
+- Panel resize via drag handle
+- Agent templates/presets
+- Workflow recording and replay
+- Integration with GitHub Issues/PRs
+- Cost tracking and token usage monitoring
+- Multi-repo support
+- Agent-to-agent communication channels
