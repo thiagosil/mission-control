@@ -36,8 +36,11 @@ defmodule MissionControlWeb.DashboardLive do
        editing_deps_task_id: nil,
        events: events,
        right_panel: "terminal",
+       right_panel_collapsed: false,
        event_filter_type: nil,
        event_filter_agent_id: nil,
+       filter_priority: nil,
+       filter_tag: nil,
        show_goal_form: false,
        orchestrator_agent_id: nil,
        orchestrator_output: "",
@@ -125,6 +128,21 @@ defmodule MissionControlWeb.DashboardLive do
       case params do
         %{"dependencies" => deps} when is_list(deps) ->
           %{params | "dependencies" => Enum.map(deps, &String.to_integer/1)}
+
+        _ ->
+          params
+      end
+
+    params =
+      case params do
+        %{"tags_input" => tags_input} ->
+          tags =
+            tags_input
+            |> String.split(",")
+            |> Enum.map(&String.trim/1)
+            |> Enum.reject(&(&1 == ""))
+
+          params |> Map.delete("tags_input") |> Map.put("tags", tags)
 
         _ ->
           params
@@ -254,6 +272,10 @@ defmodule MissionControlWeb.DashboardLive do
     {:noreply, assign(socket, right_panel: panel)}
   end
 
+  def handle_event("toggle_right_panel", _params, socket) do
+    {:noreply, assign(socket, right_panel_collapsed: !socket.assigns.right_panel_collapsed)}
+  end
+
   # --- Orchestrator events ---
 
   def handle_event("show_goal_form", _params, socket) do
@@ -343,6 +365,16 @@ defmodule MissionControlWeb.DashboardLive do
     idx = String.to_integer(index)
     proposals = List.delete_at(socket.assigns.orchestrator_proposals, idx)
     {:noreply, assign(socket, orchestrator_proposals: proposals)}
+  end
+
+  def handle_event("filter_tasks", params, socket) do
+    priority = if params["priority"] == "", do: nil, else: params["priority"]
+    tag = if params["tag"] == "", do: nil, else: params["tag"]
+    {:noreply, assign(socket, filter_priority: priority, filter_tag: tag)}
+  end
+
+  def handle_event("clear_task_filters", _params, socket) do
+    {:noreply, assign(socket, filter_priority: nil, filter_tag: nil)}
   end
 
   def handle_event("filter_events", params, socket) do
@@ -549,6 +581,18 @@ defmodule MissionControlWeb.DashboardLive do
     Enum.filter(agents, &(&1.status == "running"))
   end
 
+  defp queued_tasks(tasks) do
+    Enum.filter(tasks, &(&1.column in ["inbox", "assigned"]))
+  end
+
+  defp filter_tasks(tasks, nil, nil), do: tasks
+
+  defp filter_tasks(tasks, priority, tag) do
+    tasks
+    |> then(fn ts -> if priority, do: Enum.filter(ts, &(&1.priority == priority)), else: ts end)
+    |> then(fn ts -> if tag, do: Enum.filter(ts, &(tag in &1.tags)), else: ts end)
+  end
+
   defp build_event_filters(type, agent_id) do
     opts = [limit: 50]
     opts = if type, do: Keyword.put(opts, :type, type), else: opts
@@ -683,8 +727,28 @@ defmodule MissionControlWeb.DashboardLive do
 
       <%!-- Task Board (center) --%>
       <main class="flex-1 flex flex-col overflow-hidden">
-        <div class="px-5 py-4 border-b border-base-300 bg-base-100 flex items-center justify-between">
-          <h2 class="text-sm font-semibold text-base-content tracking-tight">Task Board</h2>
+        <div class="px-5 py-3 border-b border-base-300 bg-base-100 flex items-center justify-between">
+          <div class="flex items-center gap-4">
+            <h2 class="text-sm font-semibold text-base-content tracking-tight">Task Board</h2>
+            <div class="flex items-center gap-3">
+              <div class="flex items-center gap-1.5 text-xs text-base-content/50" id="stat-agents">
+                <span class="w-2 h-2 rounded-full bg-success"></span>
+                <span>
+                  <span class="font-medium text-base-content/70">
+                    {length(running_agents(@agents))}
+                  </span>
+                  active
+                </span>
+              </div>
+              <div class="flex items-center gap-1.5 text-xs text-base-content/50" id="stat-queued">
+                <.icon name="hero-inbox-stack-micro" class="size-3.5 text-base-content/30" />
+                <span>
+                  <span class="font-medium text-base-content/70">{length(queued_tasks(@tasks))}</span>
+                  queued
+                </span>
+              </div>
+            </div>
+          </div>
           <div class="flex items-center gap-2">
             <button
               phx-click="show_goal_form"
@@ -734,6 +798,29 @@ defmodule MissionControlWeb.DashboardLive do
                     phx-debounce="300"
                     class="textarea textarea-bordered textarea-sm w-full"
                   />
+                </div>
+                <div class="flex gap-3">
+                  <div class="flex-1">
+                    <label class="text-xs font-medium text-base-content/60 mb-1 block">
+                      Priority
+                    </label>
+                    <select
+                      name="task[priority]"
+                      class="select select-bordered select-sm w-full"
+                    >
+                      <option value="normal" selected>Normal</option>
+                      <option value="urgent">Urgent</option>
+                    </select>
+                  </div>
+                  <div class="flex-1">
+                    <label class="text-xs font-medium text-base-content/60 mb-1 block">Tags</label>
+                    <input
+                      type="text"
+                      name="task[tags_input]"
+                      placeholder="e.g. backend, auth"
+                      class="input input-bordered input-sm w-full"
+                    />
+                  </div>
                 </div>
                 <%= if @tasks != [] do %>
                   <div>
@@ -925,13 +1012,53 @@ defmodule MissionControlWeb.DashboardLive do
           </div>
         <% end %>
 
+        <%!-- Task filters --%>
+        <% all_tags = @tasks |> Enum.flat_map(& &1.tags) |> Enum.uniq() |> Enum.sort() %>
+        <%= if all_tags != [] or Enum.any?(@tasks, &(&1.priority == "urgent")) do %>
+          <div class="px-5 py-2 border-b border-base-300 bg-base-100 flex items-center gap-2">
+            <span class="text-[10px] font-medium text-base-content/30 uppercase tracking-wider">
+              Filter
+            </span>
+            <form phx-change="filter_tasks" class="flex items-center gap-2">
+              <select
+                name="priority"
+                class="select select-xs select-bordered bg-base-200 text-xs"
+              >
+                <option value="">All priorities</option>
+                <option value="normal" selected={@filter_priority == "normal"}>Normal</option>
+                <option value="urgent" selected={@filter_priority == "urgent"}>Urgent</option>
+              </select>
+              <%= if all_tags != [] do %>
+                <select
+                  name="tag"
+                  class="select select-xs select-bordered bg-base-200 text-xs"
+                >
+                  <option value="">All tags</option>
+                  <option :for={tag <- all_tags} value={tag} selected={@filter_tag == tag}>
+                    {tag}
+                  </option>
+                </select>
+              <% end %>
+            </form>
+            <%= if @filter_priority || @filter_tag do %>
+              <button
+                phx-click="clear_task_filters"
+                class="text-[10px] text-base-content/40 hover:text-base-content/70 cursor-pointer"
+              >
+                Clear
+              </button>
+            <% end %>
+          </div>
+        <% end %>
+
+        <% filtered_tasks = filter_tasks(@tasks, @filter_priority, @filter_tag) %>
         <div class="flex-1 overflow-x-auto p-4">
           <div class="flex gap-0.5 h-full min-w-max">
             <.kanban_column
               :for={col <- @columns}
               title={column_label(col)}
               column={col}
-              tasks={tasks_for_column(@tasks, col)}
+              tasks={tasks_for_column(filtered_tasks, col)}
               all_tasks={@tasks}
               transitions={next_columns(col)}
               agents={@agents}
@@ -941,8 +1068,23 @@ defmodule MissionControlWeb.DashboardLive do
         </div>
       </main>
 
+      <%!-- Right Panel Expand Button (when collapsed) --%>
+      <%= if @right_panel_collapsed do %>
+        <button
+          phx-click="toggle_right_panel"
+          class="flex-shrink-0 w-8 flex flex-col items-center justify-center border-l border-base-300 bg-base-100 hover:bg-base-200 transition-colors cursor-pointer"
+          data-theme="dark"
+          title="Expand panel"
+        >
+          <.icon name="hero-chevron-left-micro" class="size-4 text-base-content/40" />
+        </button>
+      <% end %>
+
       <%!-- Right Panel (Terminal / Activity) --%>
-      <aside class="w-96 flex-shrink-0 flex flex-col border-l border-base-300" data-theme="dark">
+      <aside
+        class={"w-96 flex-shrink-0 flex flex-col border-l border-base-300 " <> if(@right_panel_collapsed, do: "hidden", else: "")}
+        data-theme="dark"
+      >
         <%!-- Tab bar --%>
         <div class="flex border-b border-base-300 bg-base-100">
           <button
@@ -966,6 +1108,13 @@ defmodule MissionControlWeb.DashboardLive do
               )}
           >
             Activity
+          </button>
+          <button
+            phx-click="toggle_right_panel"
+            class="px-2 py-2.5 text-base-content/30 hover:text-base-content/60 transition-colors cursor-pointer"
+            title="Collapse panel"
+          >
+            <.icon name="hero-chevron-right-micro" class="size-4" />
           </button>
         </div>
 
@@ -1129,7 +1278,12 @@ defmodule MissionControlWeb.DashboardLive do
     <div class={"bg-base-100 rounded-lg border p-2.5 shadow-sm group " <>
       if(@unresolved_deps != [], do: "border-warning/40", else: "border-base-300")}>
       <div class="flex items-start justify-between gap-1">
-        <p class="text-xs font-medium text-base-content leading-snug flex-1">{@task.title}</p>
+        <div class="flex items-center gap-1.5 flex-1 min-w-0">
+          <%= if @task.priority == "urgent" do %>
+            <span class="w-1.5 h-1.5 rounded-full bg-error flex-shrink-0" title="Urgent" />
+          <% end %>
+          <p class="text-xs font-medium text-base-content leading-snug truncate">{@task.title}</p>
+        </div>
         <div class="flex gap-0.5 flex-shrink-0">
           <button
             phx-click="edit_deps"
@@ -1151,6 +1305,16 @@ defmodule MissionControlWeb.DashboardLive do
       </div>
       <%= if @task.description && @task.description != "" do %>
         <p class="text-[11px] text-base-content/40 mt-1 line-clamp-2">{@task.description}</p>
+      <% end %>
+      <%= if @task.tags != [] do %>
+        <div class="flex flex-wrap gap-1 mt-1.5">
+          <span
+            :for={tag <- @task.tags}
+            class="inline-block px-1.5 py-0.5 rounded text-[10px] bg-base-200 text-base-content/50"
+          >
+            {tag}
+          </span>
+        </div>
       <% end %>
       <%!-- Dependencies / Blocked by --%>
       <%= if @unresolved_deps != [] do %>

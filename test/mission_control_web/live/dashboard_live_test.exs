@@ -451,4 +451,144 @@ defmodule MissionControlWeb.DashboardLiveTest do
     html = render(view)
     assert html =~ "Decomposition Failed" or html =~ "Orchestrator"
   end
+
+  # --- Header stats tests ---
+
+  test "header shows active agent count", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+
+    # Initially 0 active agents
+    assert has_element?(view, "#stat-agents", "0")
+
+    # Spawn an agent
+    view |> element("button", "Spawn Agent") |> render_click()
+    assert has_element?(view, "#stat-agents", "1")
+  end
+
+  test "header shows queued task count", %{conn: conn} do
+    {:ok, _} = MissionControl.Tasks.create_task(%{title: "Inbox task 1"})
+    {:ok, _} = MissionControl.Tasks.create_task(%{title: "Inbox task 2"})
+    {:ok, _} = MissionControl.Tasks.create_task(%{title: "Done task", column: "done"})
+
+    {:ok, view, _html} = live(conn, "/")
+
+    # 2 queued (inbox), not 3
+    assert has_element?(view, "#stat-queued", "2")
+  end
+
+  test "header stats update in real-time when task is created", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+    assert has_element?(view, "#stat-queued", "0")
+
+    # Create a task from outside the LiveView
+    MissionControl.Tasks.create_task(%{title: "New queued"})
+    Process.sleep(50)
+
+    assert has_element?(view, "#stat-queued", "1")
+  end
+
+  # --- Tags and Priority tests ---
+
+  test "task creation form has priority and tags fields", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+    html = view |> element("button", "New Task") |> render_click()
+
+    assert html =~ "Priority"
+    assert html =~ "Normal"
+    assert html =~ "Urgent"
+    assert html =~ "Tags"
+  end
+
+  test "creating a task with priority and tags", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+    view |> element("button", "New Task") |> render_click()
+
+    view
+    |> form("form[phx-submit=create_task]",
+      task: %{title: "Tagged task", priority: "urgent", tags_input: "backend, auth"}
+    )
+    |> render_submit()
+
+    html = render(view)
+    assert html =~ "Tagged task"
+    assert html =~ "backend"
+    assert html =~ "auth"
+  end
+
+  test "urgent task shows priority indicator on card", %{conn: conn} do
+    {:ok, _} = MissionControl.Tasks.create_task(%{title: "Urgent fix", priority: "urgent"})
+
+    {:ok, _view, html} = live(conn, "/")
+    assert html =~ "Urgent fix"
+    assert html =~ "bg-error"
+  end
+
+  test "task tags appear on card", %{conn: conn} do
+    {:ok, _} =
+      MissionControl.Tasks.create_task(%{title: "Tagged", tags: ["frontend", "css"]})
+
+    {:ok, _view, html} = live(conn, "/")
+    assert html =~ "frontend"
+    assert html =~ "css"
+  end
+
+  # --- Task filtering tests ---
+
+  test "filtering tasks by priority shows only matching tasks", %{conn: conn} do
+    {:ok, _} = MissionControl.Tasks.create_task(%{title: "Normal task", priority: "normal"})
+    {:ok, _} = MissionControl.Tasks.create_task(%{title: "Urgent task", priority: "urgent"})
+
+    {:ok, view, _html} = live(conn, "/")
+
+    html = render_click(view, "filter_tasks", %{"priority" => "urgent", "tag" => ""})
+
+    assert html =~ "Urgent task"
+    refute has_element?(view, ".bg-base-100.rounded-lg.border", "Normal task")
+  end
+
+  test "filtering tasks by tag shows only matching tasks", %{conn: conn} do
+    {:ok, _} = MissionControl.Tasks.create_task(%{title: "Backend task", tags: ["backend"]})
+    {:ok, _} = MissionControl.Tasks.create_task(%{title: "Frontend task", tags: ["frontend"]})
+
+    {:ok, view, _html} = live(conn, "/")
+
+    html = render_click(view, "filter_tasks", %{"priority" => "", "tag" => "backend"})
+
+    assert html =~ "Backend task"
+    refute has_element?(view, ".bg-base-100.rounded-lg.border", "Frontend task")
+  end
+
+  test "clearing filters shows all tasks", %{conn: conn} do
+    {:ok, _} = MissionControl.Tasks.create_task(%{title: "Normal task", priority: "normal"})
+    {:ok, _} = MissionControl.Tasks.create_task(%{title: "Urgent task", priority: "urgent"})
+
+    {:ok, view, _html} = live(conn, "/")
+
+    render_click(view, "filter_tasks", %{"priority" => "urgent", "tag" => ""})
+    html = render_click(view, "clear_task_filters", %{})
+
+    assert html =~ "Normal task"
+    assert html =~ "Urgent task"
+  end
+
+  # --- Right panel collapse/expand tests ---
+
+  test "right panel can be collapsed and expanded", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+
+    # Panel is initially visible — tab bar has collapse button
+    assert has_element?(view, "button[title=\"Collapse panel\"]")
+    refute has_element?(view, "button[title=\"Expand panel\"]")
+
+    # Collapse the panel
+    render_click(view, "toggle_right_panel", %{})
+
+    # Expand button should be visible, collapse button should be gone
+    assert has_element?(view, "button[title=\"Expand panel\"]")
+
+    # Expand the panel again
+    render_click(view, "toggle_right_panel", %{})
+    assert has_element?(view, "button[title=\"Collapse panel\"]")
+    refute has_element?(view, "button[title=\"Expand panel\"]")
+  end
 end
