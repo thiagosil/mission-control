@@ -2,6 +2,7 @@ defmodule MissionControl.Agents do
   import Ecto.Query
   alias MissionControl.Repo
   alias MissionControl.Activity
+  alias MissionControl.Config
   alias MissionControl.Agents.{Agent, AgentProcess, AgentSupervisor}
 
   # --- Startup ---
@@ -114,7 +115,8 @@ defmodule MissionControl.Agents do
   def spawn_agent_for_task(task, opts \\ []) do
     branch_name = Keyword.get(opts, :branch_name)
     prompt = build_task_prompt(task, branch_name)
-    command = AgentProcess.default_command()
+    template = AgentProcess.default_command()
+    command = Config.interpolate_command(template, %{"prompt" => shell_escape(prompt)})
 
     config =
       %{"command" => command, "task_id" => task.id, "prompt" => prompt}
@@ -128,6 +130,10 @@ defmodule MissionControl.Agents do
     }
 
     spawn_agent(attrs)
+  end
+
+  defp shell_escape(str) do
+    String.replace(str, ~S("), ~S(\"))
   end
 
   defp build_task_prompt(task, branch_name) do

@@ -2,15 +2,10 @@ defmodule MissionControl.Agents.AgentProcess do
   use GenServer, restart: :temporary
 
   @max_scrollback 1000
-  @default_command Application.compile_env(
-                     :mission_control,
-                     :default_agent_command,
-                     "bash -c 'for i in $(seq 1 20); do echo \"[agent] step $i: working...\"; sleep 0.3; done; echo \"[agent] done.\"'"
-                   )
 
   # --- Client API ---
 
-  def default_command, do: @default_command
+  def default_command, do: MissionControl.Config.agent_command_template()
 
   def start_link(%{id: agent_id} = agent) do
     GenServer.start_link(__MODULE__, agent, name: via(agent_id))
@@ -38,7 +33,7 @@ defmodule MissionControl.Agents.AgentProcess do
   @impl true
   def init(agent) do
     config = agent.config || %{}
-    command = Map.get(config, "command", @default_command)
+    command = Map.get(config, "command", default_command())
     task_id = Map.get(config, "task_id")
 
     port =
