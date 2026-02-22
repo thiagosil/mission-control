@@ -61,15 +61,26 @@ defmodule MissionControl.Tasks do
   # --- Assignment ---
 
   def assign_and_start_task(%Task{} = task) do
-    with {:ok, agent} <- MissionControl.Agents.spawn_agent_for_task(task),
-         {:ok, task} <- update_task(task, %{agent_id: agent.id, column: "assigned"}),
+    alias MissionControl.Git
+
+    with {:ok, branch_name} <- Git.create_branch(task),
+         :ok <- Git.checkout_branch(branch_name),
+         {:ok, agent} <-
+           MissionControl.Agents.spawn_agent_for_task(task, branch_name: branch_name),
+         {:ok, task} <-
+           update_task(task, %{agent_id: agent.id, column: "assigned", branch_name: branch_name}),
          {:ok, task} <- move_task(task, "in_progress") do
       {:ok, task, agent}
     end
   end
 
   def assign_task_to_existing_agent(%Task{} = task, agent_id) do
-    with {:ok, task} <- update_task(task, %{agent_id: agent_id, column: "assigned"}),
+    alias MissionControl.Git
+
+    with {:ok, branch_name} <- Git.create_branch(task),
+         :ok <- Git.checkout_branch(branch_name),
+         {:ok, task} <-
+           update_task(task, %{agent_id: agent_id, column: "assigned", branch_name: branch_name}),
          {:ok, task} <- move_task(task, "in_progress") do
       {:ok, task}
     end
