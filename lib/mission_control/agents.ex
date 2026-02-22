@@ -67,21 +67,29 @@ defmodule MissionControl.Agents do
 
   # --- Task integration ---
 
-  def spawn_agent_for_task(task) do
-    prompt = build_task_prompt(task)
+  def spawn_agent_for_task(task, opts \\ []) do
+    branch_name = Keyword.get(opts, :branch_name)
+    prompt = build_task_prompt(task, branch_name)
     command = AgentProcess.default_command()
+
+    config =
+      %{"command" => command, "task_id" => task.id, "prompt" => prompt}
+      |> then(fn c ->
+        if branch_name, do: Map.put(c, "branch", branch_name), else: c
+      end)
 
     attrs = %{
       name: "Agent for: #{String.slice(task.title, 0, 40)}",
-      config: %{"command" => command, "task_id" => task.id, "prompt" => prompt}
+      config: config
     }
 
     spawn_agent(attrs)
   end
 
-  defp build_task_prompt(task) do
+  defp build_task_prompt(task, branch_name) do
     desc = if task.description, do: "\n\n#{task.description}", else: ""
-    "Task: #{task.title}#{desc}"
+    branch = if branch_name, do: "\nBranch: #{branch_name}", else: ""
+    "Task: #{task.title}#{desc}#{branch}"
   end
 
   # --- PubSub ---

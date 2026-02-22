@@ -343,6 +343,11 @@ defmodule MissionControlWeb.DashboardLive do
                     <span class="truncate">{agent.name}</span>
                     <%= if task = task_for_agent(agent.id, @tasks) do %>
                       <span class="text-[10px] text-base-content/40 truncate">{task.title}</span>
+                      <%= if task.branch_name do %>
+                        <span class="text-[10px] font-mono text-base-content/30 truncate">
+                          {task.branch_name}
+                        </span>
+                      <% end %>
                     <% end %>
                   </span>
                 </button>
@@ -531,6 +536,12 @@ defmodule MissionControlWeb.DashboardLive do
       </div>
       <%= if @task.description && @task.description != "" do %>
         <p class="text-[11px] text-base-content/40 mt-1 line-clamp-2">{@task.description}</p>
+      <% end %>
+      <%!-- Branch name --%>
+      <%= if @task.branch_name do %>
+        <p class="text-[10px] font-mono text-base-content/30 mt-1 truncate">
+          {@task.branch_name}
+        </p>
       <% end %>
       <%!-- Agent badge --%>
       <%= if @agent do %>
