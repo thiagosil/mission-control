@@ -90,7 +90,9 @@ defmodule MissionControlWeb.DashboardLiveTest do
     view |> element("button", "New Task") |> render_click()
 
     view
-    |> form("form", task: %{title: "My new task", description: "A test task"})
+    |> form("form[phx-submit=create_task]",
+      task: %{title: "My new task", description: "A test task"}
+    )
     |> render_submit()
 
     html = render(view)
@@ -104,7 +106,7 @@ defmodule MissionControlWeb.DashboardLiveTest do
 
     html =
       view
-      |> form("form", task: %{title: ""})
+      |> form("form[phx-submit=create_task]", task: %{title: ""})
       |> render_submit()
 
     # Form should still be visible with errors
@@ -243,7 +245,7 @@ defmodule MissionControlWeb.DashboardLiveTest do
     view |> element("button", "New Task") |> render_click()
 
     view
-    |> form("form", task: %{title: "Activity test task"})
+    |> form("form[phx-submit=create_task]", task: %{title: "Activity test task"})
     |> render_submit()
 
     html = render(view)

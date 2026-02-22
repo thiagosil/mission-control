@@ -179,25 +179,20 @@ defmodule MissionControlWeb.DashboardLive do
     {:noreply, assign(socket, right_panel: panel)}
   end
 
-  def handle_event("filter_events", %{"type" => ""}, socket) do
-    events = Activity.list(build_event_filters(nil, socket.assigns.event_filter_agent_id))
-    {:noreply, assign(socket, events: events, event_filter_type: nil)}
-  end
+  def handle_event("filter_events", params, socket) do
+    type = if params["type"] == "", do: nil, else: params["type"]
 
-  def handle_event("filter_events", %{"type" => type}, socket) do
-    events = Activity.list(build_event_filters(type, socket.assigns.event_filter_agent_id))
-    {:noreply, assign(socket, events: events, event_filter_type: type)}
-  end
+    agent_id =
+      case params["agent_id"] do
+        "" -> nil
+        nil -> nil
+        id -> String.to_integer(id)
+      end
 
-  def handle_event("filter_events_by_agent", %{"agent_id" => ""}, socket) do
-    events = Activity.list(build_event_filters(socket.assigns.event_filter_type, nil))
-    {:noreply, assign(socket, events: events, event_filter_agent_id: nil)}
-  end
+    events = Activity.list(build_event_filters(type, agent_id))
 
-  def handle_event("filter_events_by_agent", %{"agent_id" => agent_id}, socket) do
-    agent_id = String.to_integer(agent_id)
-    events = Activity.list(build_event_filters(socket.assigns.event_filter_type, agent_id))
-    {:noreply, assign(socket, events: events, event_filter_agent_id: agent_id)}
+    {:noreply,
+     assign(socket, events: events, event_filter_type: type, event_filter_agent_id: agent_id)}
   end
 
   # --- PubSub handlers ---
@@ -590,9 +585,8 @@ defmodule MissionControlWeb.DashboardLive do
         <div class={
           if(@right_panel == "activity", do: "flex-1 flex flex-col overflow-hidden", else: "hidden")
         }>
-          <div class="px-4 py-2 bg-base-100 flex gap-2">
+          <form phx-change="filter_events" class="px-4 py-2 bg-base-100 flex gap-2">
             <select
-              phx-change="filter_events"
               name="type"
               class="select select-xs select-bordered flex-1 bg-base-200 text-base-content text-xs"
             >
@@ -606,7 +600,6 @@ defmodule MissionControlWeb.DashboardLive do
               </option>
             </select>
             <select
-              phx-change="filter_events_by_agent"
               name="agent_id"
               class="select select-xs select-bordered flex-1 bg-base-200 text-base-content text-xs"
             >
@@ -619,7 +612,7 @@ defmodule MissionControlWeb.DashboardLive do
                 {agent.name}
               </option>
             </select>
-          </div>
+          </form>
           <div id="activity-feed" class="flex-1 overflow-y-auto px-4 pb-4">
             <%= if @events == [] do %>
               <p class="text-xs text-base-content/40 text-center mt-8">No activity yet</p>
