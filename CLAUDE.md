@@ -30,15 +30,32 @@ The `precommit` alias runs in the test environment (configured via `cli/preferre
 **Stack**: Elixir 1.19+ / OTP 28 / Phoenix 1.8 / LiveView 1.1 / SQLite3 / Tailwind 4 + daisyUI
 
 Three-layer design:
-1. **Web layer** (`lib/mission_control_web/`) — Phoenix LiveView dashboard with three-panel layout (agents sidebar | kanban task board | terminal viewer). Real-time updates via Phoenix Channels.
-2. **Domain layer** (`lib/mission_control/`) — OTP GenServers for agent supervision, task state machine, terminal capture, git branch management, orchestrator, and activity feed. Agents are spawned as Erlang Ports for crash isolation and natural streaming.
+1. **Web layer** (`lib/mission_control_web/`) — Single LiveView (`DashboardLive`) with three-panel layout: agents sidebar | kanban task board | terminal viewer. Real-time updates via PubSub.
+2. **Domain layer** (`lib/mission_control/`) — Context modules + OTP processes:
+   - `Agents` — CRUD, spawn/stop lifecycle. `AgentProcess` GenServer wraps an Erlang Port subprocess with 1000-line scrollback buffer. `AgentSupervisor` (DynamicSupervisor) + `AgentRegistry` for process management.
+   - `Tasks` — CRUD, column state machine (inbox → assigned → in_progress → review → done), assignment flow (`assign_and_start_task/1` creates branch + spawns agent).
+   - `Git` — Branch-per-task operations: `create_branch/2`, `checkout_branch/2`, `generate_branch_name/1`. All via `System.cmd`.
+   - `Activity` — Append-only event log with filtering (`list/1` supports `type:`, `agent_id:`, `task_id:`, `since:`, `limit:`). Other modules call `Activity.append/1` on state changes.
 3. **Persistence** (`lib/mission_control/repo.ex`) — Ecto with SQLite via `ecto_sqlite3`. Schemas: agents, tasks, events.
 
-Key architectural decisions:
+### Supervision Tree
+
+`Application` starts (in order): Telemetry → Repo → Ecto.Migrator (auto-migrate) → DNSCluster → PubSub → AgentRegistry → AgentSupervisor → stale agent reset → Endpoint.
+
+### PubSub Topics
+
+- `"agents"` — agent lifecycle broadcasts (`{:agent_changed, agent}`, `{:agent_exited, id, status}`)
+- `"agent_output:<id>"` — per-agent terminal output (`{:output, id, line}`)
+- `"tasks"` — task CRUD broadcasts (`{:task_created, t}`, `{:task_updated, t}`, `{:task_deleted, t}`)
+- `"activity"` — activity feed (`{:new_event, event}`)
+
+### Key Architectural Decisions
+
 - **Ports over NIFs** for agent subprocesses — crash isolation + streaming
 - **SQLite** — zero-dependency local tool, single-file DB
 - **Agent-agnostic interface** — command template accepts any CLI tool (`claude`, `codex`, etc.)
 - **Branch-per-task** git workflow — branches named `mc/<task-id>-<slug>`
+- **Auto-migrate on boot** — Ecto.Migrator runs in the supervision tree (skipped for releases)
 
 ## UI & Styling
 
