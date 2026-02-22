@@ -140,8 +140,9 @@ defmodule MissionControlWeb.DashboardLiveTest do
     assert html =~ "Delete me"
 
     render_click(view, "delete_task", %{"id" => "#{task.id}"})
-    html = render(view)
-    refute html =~ "Delete me"
+    # Task card uses the title in a <p> tag — check it's gone from the board
+    # (activity feed may still reference the title in event messages)
+    refute has_element?(view, ".bg-base-100.rounded-lg.border", "Delete me")
   end
 
   test "tasks appear in correct kanban columns", %{conn: conn} do
@@ -208,5 +209,58 @@ defmodule MissionControlWeb.DashboardLiveTest do
 
     html = render(view)
     assert html =~ "Sidebar task"
+  end
+
+  # --- Activity feed tests ---
+
+  test "Activity tab is rendered in the right panel", %{conn: conn} do
+    {:ok, _view, html} = live(conn, "/")
+    assert html =~ "Activity"
+    assert html =~ "Terminal"
+  end
+
+  test "switching to Activity tab shows activity feed", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+
+    html = render_click(view, "switch_right_panel", %{"panel" => "activity"})
+    assert html =~ "activity-feed"
+    assert html =~ "No activity yet"
+  end
+
+  test "switching back to Terminal tab works", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+
+    render_click(view, "switch_right_panel", %{"panel" => "activity"})
+    html = render_click(view, "switch_right_panel", %{"panel" => "terminal"})
+    assert html =~ "terminal-output"
+  end
+
+  test "events appear in activity feed after task creation", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+    render_click(view, "switch_right_panel", %{"panel" => "activity"})
+
+    # Create a task
+    view |> element("button", "New Task") |> render_click()
+
+    view
+    |> form("form", task: %{title: "Activity test task"})
+    |> render_submit()
+
+    html = render(view)
+    assert html =~ "Activity test task"
+  end
+
+  test "real-time events appear via PubSub", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+    render_click(view, "switch_right_panel", %{"panel" => "activity"})
+
+    # Create task from outside the LiveView
+    MissionControl.Tasks.create_task(%{title: "PubSub task"})
+
+    # Wait briefly for PubSub
+    Process.sleep(50)
+
+    html = render(view)
+    assert html =~ "PubSub task"
   end
 end

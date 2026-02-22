@@ -1,6 +1,7 @@
 defmodule MissionControl.Agents do
   import Ecto.Query
   alias MissionControl.Repo
+  alias MissionControl.Activity
   alias MissionControl.Agents.{Agent, AgentProcess, AgentSupervisor}
 
   # --- Startup ---
@@ -34,6 +35,14 @@ defmodule MissionControl.Agents do
     with {:ok, agent} <- create_agent(Map.put(attrs, :status, "running")),
          {:ok, _pid} <- AgentSupervisor.start_agent(agent) do
       broadcast_agent_change(agent)
+
+      Activity.append(%{
+        type: "agent_spawned",
+        agent_id: agent.id,
+        task_id: agent.config["task_id"],
+        message: "Agent \"#{agent.name}\" spawned"
+      })
+
       {:ok, agent}
     else
       {:error, reason} -> {:error, reason}
@@ -46,6 +55,13 @@ defmodule MissionControl.Agents do
         agent = get_agent!(agent_id)
         {:ok, agent} = update_agent(agent, %{status: "stopped"})
         broadcast_agent_change(agent)
+
+        Activity.append(%{
+          type: "agent_stopped",
+          agent_id: agent.id,
+          message: "Agent \"#{agent.name}\" stopped"
+        })
+
         {:ok, agent}
 
       {:error, reason} ->

@@ -95,6 +95,14 @@ defmodule MissionControl.Agents.AgentProcess do
         |> MissionControl.Repo.update()
     end
 
+    MissionControl.Activity.append(%{
+      type: "agent_exited",
+      agent_id: state.agent_id,
+      task_id: state.task_id,
+      message: "Agent exited (#{new_status})",
+      metadata: %{"exit_status" => exit_status}
+    })
+
     transition_task_on_exit(state.task_id, exit_status)
 
     Phoenix.PubSub.broadcast(
