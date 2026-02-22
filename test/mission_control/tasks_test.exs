@@ -226,4 +226,142 @@ defmodule MissionControl.TasksTest do
       refute Task.valid_transition?("review", "assigned")
     end
   end
+
+  describe "task dependencies" do
+    test "creates a task with dependencies" do
+      {:ok, blocker} = Tasks.create_task(%{title: "Blocker"})
+      {:ok, task} = Tasks.create_task(%{title: "Blocked", dependencies: [blocker.id]})
+      assert task.dependencies == [blocker.id]
+    end
+
+    test "move to in_progress is blocked when dependencies are not done" do
+      {:ok, blocker} = Tasks.create_task(%{title: "Blocker"})
+
+      {:ok, task} =
+        Tasks.create_task(%{title: "Blocked", column: "assigned", dependencies: [blocker.id]})
+
+      assert {:error, :blocked_by_dependencies} = Tasks.move_task(task, "in_progress")
+    end
+
+    test "move to in_progress is allowed when all dependencies are done" do
+      {:ok, blocker} = Tasks.create_task(%{title: "Blocker", column: "done"})
+
+      {:ok, task} =
+        Tasks.create_task(%{title: "Unblocked", column: "assigned", dependencies: [blocker.id]})
+
+      assert {:ok, moved} = Tasks.move_task(task, "in_progress")
+      assert moved.column == "in_progress"
+    end
+
+    test "move to in_progress is blocked when some dependencies are not done" do
+      {:ok, done_blocker} = Tasks.create_task(%{title: "Done blocker", column: "done"})
+      {:ok, open_blocker} = Tasks.create_task(%{title: "Open blocker", column: "in_progress"})
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          title: "Partially blocked",
+          column: "assigned",
+          dependencies: [done_blocker.id, open_blocker.id]
+        })
+
+      assert {:error, :blocked_by_dependencies} = Tasks.move_task(task, "in_progress")
+    end
+
+    test "task without dependencies can move to in_progress normally" do
+      {:ok, task} = Tasks.create_task(%{title: "No deps", column: "assigned"})
+      assert {:ok, moved} = Tasks.move_task(task, "in_progress")
+      assert moved.column == "in_progress"
+    end
+
+    test "has_unresolved_dependencies? returns false for empty dependencies" do
+      {:ok, task} = Tasks.create_task(%{title: "No deps"})
+      refute Tasks.has_unresolved_dependencies?(task)
+    end
+
+    test "has_unresolved_dependencies? returns true when blocker is not done" do
+      {:ok, blocker} = Tasks.create_task(%{title: "Blocker"})
+      {:ok, task} = Tasks.create_task(%{title: "Blocked", dependencies: [blocker.id]})
+      assert Tasks.has_unresolved_dependencies?(task)
+    end
+
+    test "has_unresolved_dependencies? returns false when all blockers are done" do
+      {:ok, blocker} = Tasks.create_task(%{title: "Blocker", column: "done"})
+      {:ok, task} = Tasks.create_task(%{title: "Unblocked", dependencies: [blocker.id]})
+      refute Tasks.has_unresolved_dependencies?(task)
+    end
+
+    test "unresolved_dependency_ids returns IDs of non-done dependencies" do
+      {:ok, done} = Tasks.create_task(%{title: "Done", column: "done"})
+      {:ok, open} = Tasks.create_task(%{title: "Open", column: "inbox"})
+
+      {:ok, task} =
+        Tasks.create_task(%{title: "Mixed deps", dependencies: [done.id, open.id]})
+
+      assert Tasks.unresolved_dependency_ids(task) == [open.id]
+    end
+
+    test "when blocking task moves to done, downstream task becomes unblocked" do
+      {:ok, blocker} = Tasks.create_task(%{title: "Blocker", column: "review"})
+
+      {:ok, task} =
+        Tasks.create_task(%{title: "Blocked", column: "assigned", dependencies: [blocker.id]})
+
+      # Cannot move yet
+      assert {:error, :blocked_by_dependencies} = Tasks.move_task(task, "in_progress")
+
+      # Move blocker to done
+      {:ok, _} = Tasks.move_task(blocker, "done")
+
+      # Now the downstream task is unblocked
+      assert {:ok, moved} = Tasks.move_task(task, "in_progress")
+      assert moved.column == "in_progress"
+    end
+  end
+
+  describe "circular dependency prevention" do
+    test "rejects self-dependency" do
+      {:ok, task} = Tasks.create_task(%{title: "Self dep"})
+      assert {:error, changeset} = Tasks.update_task(task, %{dependencies: [task.id]})
+      assert %{dependencies: ["a task cannot depend on itself"]} = errors_on(changeset)
+    end
+
+    test "rejects direct circular dependency (A->B, B->A)" do
+      {:ok, a} = Tasks.create_task(%{title: "A"})
+      {:ok, b} = Tasks.create_task(%{title: "B"})
+
+      # A depends on B
+      {:ok, a} = Tasks.update_task(a, %{dependencies: [b.id]})
+      assert a.dependencies == [b.id]
+
+      # B depends on A — would create a cycle
+      assert {:error, changeset} = Tasks.update_task(b, %{dependencies: [a.id]})
+      assert %{dependencies: ["would create a circular dependency"]} = errors_on(changeset)
+    end
+
+    test "rejects transitive circular dependency (A->B->C, C->A)" do
+      {:ok, a} = Tasks.create_task(%{title: "A"})
+      {:ok, b} = Tasks.create_task(%{title: "B"})
+      {:ok, c} = Tasks.create_task(%{title: "C"})
+
+      {:ok, _a} = Tasks.update_task(a, %{dependencies: [b.id]})
+      {:ok, _b} = Tasks.update_task(b, %{dependencies: [c.id]})
+
+      # C depends on A — would create A->B->C->A cycle
+      assert {:error, changeset} = Tasks.update_task(c, %{dependencies: [a.id]})
+      assert %{dependencies: ["would create a circular dependency"]} = errors_on(changeset)
+    end
+
+    test "allows non-circular dependencies" do
+      {:ok, a} = Tasks.create_task(%{title: "A"})
+      {:ok, b} = Tasks.create_task(%{title: "B"})
+      {:ok, c} = Tasks.create_task(%{title: "C"})
+
+      # A depends on B, C depends on B — no cycle
+      {:ok, a} = Tasks.update_task(a, %{dependencies: [b.id]})
+      assert a.dependencies == [b.id]
+
+      {:ok, c} = Tasks.update_task(c, %{dependencies: [b.id]})
+      assert c.dependencies == [b.id]
+    end
+  end
 end

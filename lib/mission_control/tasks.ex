@@ -37,7 +37,18 @@ defmodule MissionControl.Tasks do
   end
 
   def update_task(%Task{} = task, attrs) do
-    case task |> Task.changeset(attrs) |> Repo.update() do
+    changeset = Task.changeset(task, attrs)
+
+    deps = Ecto.Changeset.get_field(changeset, :dependencies)
+
+    changeset =
+      if deps != [] and task.id do
+        validate_no_circular_deps(changeset, task.id, deps)
+      else
+        changeset
+      end
+
+    case Repo.update(changeset) do
       {:ok, task} ->
         broadcast_task_change({:task_updated, task})
 
@@ -77,11 +88,37 @@ defmodule MissionControl.Tasks do
   # --- State transitions ---
 
   def move_task(%Task{} = task, new_column) do
-    if Task.valid_transition?(task.column, new_column) do
-      update_task(task, %{column: new_column})
-    else
-      {:error, :invalid_transition}
+    cond do
+      !Task.valid_transition?(task.column, new_column) ->
+        {:error, :invalid_transition}
+
+      new_column == "in_progress" && has_unresolved_dependencies?(task) ->
+        {:error, :blocked_by_dependencies}
+
+      true ->
+        update_task(task, %{column: new_column})
     end
+  end
+
+  def has_unresolved_dependencies?(%Task{dependencies: []}), do: false
+
+  def has_unresolved_dependencies?(%Task{dependencies: dep_ids}) do
+    done_count =
+      Task
+      |> where([t], t.id in ^dep_ids and t.column == "done")
+      |> select([t], count(t.id))
+      |> Repo.one()
+
+    done_count < length(dep_ids)
+  end
+
+  def unresolved_dependency_ids(%Task{dependencies: []}), do: []
+
+  def unresolved_dependency_ids(%Task{dependencies: dep_ids}) do
+    Task
+    |> where([t], t.id in ^dep_ids and t.column != "done")
+    |> select([t], t.id)
+    |> Repo.all()
   end
 
   # --- Assignment ---
@@ -134,6 +171,34 @@ defmodule MissionControl.Tasks do
 
   def get_task_for_agent_by_id(task_id) do
     Repo.get(Task, task_id)
+  end
+
+  # --- Circular dependency validation ---
+
+  defp validate_no_circular_deps(changeset, task_id, deps) do
+    if task_id in deps do
+      Ecto.Changeset.add_error(changeset, :dependencies, "a task cannot depend on itself")
+    else
+      if creates_cycle?(task_id, deps, MapSet.new()) do
+        Ecto.Changeset.add_error(changeset, :dependencies, "would create a circular dependency")
+      else
+        changeset
+      end
+    end
+  end
+
+  defp creates_cycle?(task_id, dep_ids, visited) do
+    Enum.any?(dep_ids, fn dep_id ->
+      if dep_id in visited do
+        false
+      else
+        dep_task = Repo.get(Task, dep_id)
+
+        dep_task != nil &&
+          (task_id in (dep_task.dependencies || []) ||
+             creates_cycle?(task_id, dep_task.dependencies || [], MapSet.put(visited, dep_id)))
+      end
+    end)
   end
 
   # --- PubSub ---

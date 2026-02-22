@@ -33,6 +33,7 @@ defmodule MissionControlWeb.DashboardLive do
        show_task_form: false,
        task_form: to_form(Task.changeset(%Task{}, %{})),
        assigning_task_id: nil,
+       editing_deps_task_id: nil,
        events: events,
        right_panel: "terminal",
        event_filter_type: nil,
@@ -120,6 +121,15 @@ defmodule MissionControlWeb.DashboardLive do
   end
 
   def handle_event("create_task", %{"task" => params}, socket) do
+    params =
+      case params do
+        %{"dependencies" => deps} when is_list(deps) ->
+          %{params | "dependencies" => Enum.map(deps, &String.to_integer/1)}
+
+        _ ->
+          params
+      end
+
     case Tasks.create_task(params) do
       {:ok, _task} ->
         {:noreply,
@@ -142,6 +152,9 @@ defmodule MissionControlWeb.DashboardLive do
       {:error, :invalid_transition} ->
         {:noreply, put_flash(socket, :error, "Invalid transition")}
 
+      {:error, :blocked_by_dependencies} ->
+        {:noreply, put_flash(socket, :error, "Task is blocked by unresolved dependencies")}
+
       {:error, _changeset} ->
         {:noreply, put_flash(socket, :error, "Failed to move task")}
     end
@@ -156,6 +169,46 @@ defmodule MissionControlWeb.DashboardLive do
 
       {:error, _reason} ->
         {:noreply, put_flash(socket, :error, "Failed to delete task")}
+    end
+  end
+
+  # --- Dependency editing events ---
+
+  def handle_event("edit_deps", %{"id" => id}, socket) do
+    {:noreply, assign(socket, editing_deps_task_id: String.to_integer(id))}
+  end
+
+  def handle_event("cancel_edit_deps", _params, socket) do
+    {:noreply, assign(socket, editing_deps_task_id: nil)}
+  end
+
+  def handle_event("save_deps", %{"dependencies" => dep_ids}, socket) do
+    task = Tasks.get_task!(socket.assigns.editing_deps_task_id)
+    deps = Enum.map(dep_ids, &String.to_integer/1)
+
+    case Tasks.update_task(task, %{dependencies: deps}) do
+      {:ok, _updated} ->
+        {:noreply, assign(socket, editing_deps_task_id: nil)}
+
+      {:error, changeset} ->
+        msg =
+          changeset.errors
+          |> Keyword.get(:dependencies, {"Invalid dependencies", []})
+          |> elem(0)
+
+        {:noreply, put_flash(socket, :error, msg)}
+    end
+  end
+
+  def handle_event("save_deps", _params, socket) do
+    task = Tasks.get_task!(socket.assigns.editing_deps_task_id)
+
+    case Tasks.update_task(task, %{dependencies: []}) do
+      {:ok, _updated} ->
+        {:noreply, assign(socket, editing_deps_task_id: nil)}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Failed to update dependencies")}
     end
   end
 
@@ -682,6 +735,27 @@ defmodule MissionControlWeb.DashboardLive do
                     class="textarea textarea-bordered textarea-sm w-full"
                   />
                 </div>
+                <%= if @tasks != [] do %>
+                  <div>
+                    <label class="text-xs font-medium text-base-content/60 mb-1 block">
+                      Blocked by
+                    </label>
+                    <div class="max-h-32 overflow-y-auto border border-base-300 rounded-lg p-2 space-y-1">
+                      <label
+                        :for={t <- @tasks}
+                        class="flex items-center gap-2 text-xs text-base-content/70 cursor-pointer hover:text-base-content"
+                      >
+                        <input
+                          type="checkbox"
+                          name="task[dependencies][]"
+                          value={t.id}
+                          class="checkbox checkbox-xs"
+                        />
+                        <span class="truncate">#{t.id} {t.title}</span>
+                      </label>
+                    </div>
+                  </div>
+                <% end %>
                 <div class="flex justify-end gap-2 pt-2">
                   <button type="button" phx-click="cancel_task_form" class="btn btn-ghost btn-sm">
                     Cancel
@@ -691,6 +765,51 @@ defmodule MissionControlWeb.DashboardLive do
               </.form>
             </div>
           </div>
+        <% end %>
+
+        <%!-- Edit dependencies modal --%>
+        <%= if @editing_deps_task_id do %>
+          <% editing_task = Enum.find(@tasks, &(&1.id == @editing_deps_task_id)) %>
+          <%= if editing_task do %>
+            <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+              <div class="bg-base-100 rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
+                <h3 class="text-sm font-semibold text-base-content mb-1">Edit Dependencies</h3>
+                <p class="text-xs text-base-content/50 mb-4">
+                  {editing_task.title}
+                </p>
+                <form phx-submit="save_deps">
+                  <div class="max-h-48 overflow-y-auto border border-base-300 rounded-lg p-2 space-y-1 mb-4">
+                    <%= for t <- @tasks, t.id != editing_task.id do %>
+                      <label class="flex items-center gap-2 text-xs text-base-content/70 cursor-pointer hover:text-base-content">
+                        <input
+                          type="checkbox"
+                          name="dependencies[]"
+                          value={t.id}
+                          checked={t.id in editing_task.dependencies}
+                          class="checkbox checkbox-xs"
+                        />
+                        <span class="truncate">#{t.id} {t.title}</span>
+                        <span class={"text-[10px] ml-auto flex-shrink-0 " <>
+                          if(t.column == "done", do: "text-success", else: "text-base-content/30")}>
+                          {column_label(t.column)}
+                        </span>
+                      </label>
+                    <% end %>
+                  </div>
+                  <div class="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      phx-click="cancel_edit_deps"
+                      class="btn btn-ghost btn-sm"
+                    >
+                      Cancel
+                    </button>
+                    <button type="submit" class="btn btn-primary btn-sm">Save</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          <% end %>
         <% end %>
 
         <%!-- Goal decomposition modal --%>
@@ -813,6 +932,7 @@ defmodule MissionControlWeb.DashboardLive do
               title={column_label(col)}
               column={col}
               tasks={tasks_for_column(@tasks, col)}
+              all_tasks={@tasks}
               transitions={next_columns(col)}
               agents={@agents}
               assigning_task_id={@assigning_task_id}
@@ -950,6 +1070,7 @@ defmodule MissionControlWeb.DashboardLive do
   attr :title, :string, required: true
   attr :column, :string, required: true
   attr :tasks, :list, default: []
+  attr :all_tasks, :list, default: []
   attr :transitions, :list, default: []
   attr :agents, :list, default: []
   attr :assigning_task_id, :integer, default: nil
@@ -968,6 +1089,7 @@ defmodule MissionControlWeb.DashboardLive do
           <.task_card
             :for={task <- @tasks}
             task={task}
+            all_tasks={@all_tasks}
             transitions={@transitions}
             agents={@agents}
             assigning_task_id={@assigning_task_id}
@@ -979,6 +1101,7 @@ defmodule MissionControlWeb.DashboardLive do
   end
 
   attr :task, :map, required: true
+  attr :all_tasks, :list, default: []
   attr :transitions, :list, default: []
   attr :agents, :list, default: []
   attr :assigning_task_id, :integer, default: nil
@@ -987,21 +1110,67 @@ defmodule MissionControlWeb.DashboardLive do
     assigns =
       assign(assigns, :agent, agent_for_task(assigns.task, assigns.agents, assigns.task.agent_id))
 
+    unresolved =
+      if assigns.task.dependencies != [] do
+        assigns.task.dependencies
+        |> Enum.filter(fn dep_id ->
+          case Enum.find(assigns.all_tasks, &(&1.id == dep_id)) do
+            nil -> true
+            dep -> dep.column != "done"
+          end
+        end)
+      else
+        []
+      end
+
+    assigns = assign(assigns, :unresolved_deps, unresolved)
+
     ~H"""
-    <div class="bg-base-100 rounded-lg border border-base-300 p-2.5 shadow-sm group">
+    <div class={"bg-base-100 rounded-lg border p-2.5 shadow-sm group " <>
+      if(@unresolved_deps != [], do: "border-warning/40", else: "border-base-300")}>
       <div class="flex items-start justify-between gap-1">
         <p class="text-xs font-medium text-base-content leading-snug flex-1">{@task.title}</p>
-        <button
-          phx-click="delete_task"
-          phx-value-id={@task.id}
-          data-confirm="Delete this task?"
-          class="opacity-0 group-hover:opacity-100 p-0.5 rounded text-base-content/30 hover:text-error transition-all cursor-pointer"
-        >
-          <.icon name="hero-x-mark-micro" class="size-3" />
-        </button>
+        <div class="flex gap-0.5 flex-shrink-0">
+          <button
+            phx-click="edit_deps"
+            phx-value-id={@task.id}
+            class="opacity-0 group-hover:opacity-100 p-0.5 rounded text-base-content/30 hover:text-primary transition-all cursor-pointer"
+            title="Edit dependencies"
+          >
+            <.icon name="hero-link-micro" class="size-3" />
+          </button>
+          <button
+            phx-click="delete_task"
+            phx-value-id={@task.id}
+            data-confirm="Delete this task?"
+            class="opacity-0 group-hover:opacity-100 p-0.5 rounded text-base-content/30 hover:text-error transition-all cursor-pointer"
+          >
+            <.icon name="hero-x-mark-micro" class="size-3" />
+          </button>
+        </div>
       </div>
       <%= if @task.description && @task.description != "" do %>
         <p class="text-[11px] text-base-content/40 mt-1 line-clamp-2">{@task.description}</p>
+      <% end %>
+      <%!-- Dependencies / Blocked by --%>
+      <%= if @unresolved_deps != [] do %>
+        <button
+          phx-click="edit_deps"
+          phx-value-id={@task.id}
+          class="text-[10px] text-warning mt-1.5 cursor-pointer hover:text-warning/80 text-left"
+        >
+          Blocked by {Enum.map(@unresolved_deps, &"##{&1}") |> Enum.join(", ")}
+        </button>
+      <% else %>
+        <%= if @task.dependencies != [] do %>
+          <button
+            phx-click="edit_deps"
+            phx-value-id={@task.id}
+            class="text-[10px] text-success/60 mt-1.5 cursor-pointer hover:text-success text-left"
+          >
+            Deps resolved
+          </button>
+        <% end %>
       <% end %>
       <%!-- Branch name --%>
       <%= if @task.branch_name do %>
