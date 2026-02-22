@@ -1,7 +1,10 @@
 defmodule MissionControl.Tasks do
   import Ecto.Query
+  alias MissionControl.Activity
   alias MissionControl.Repo
   alias MissionControl.Tasks.Task
+
+  @git Application.compile_env(:mission_control, :git_module, MissionControl.Git)
 
   # --- CRUD ---
 
@@ -19,6 +22,13 @@ defmodule MissionControl.Tasks do
     case %Task{} |> Task.changeset(attrs) |> Repo.insert() do
       {:ok, task} ->
         broadcast_task_change({:task_created, task})
+
+        Activity.append(%{
+          type: "task_created",
+          task_id: task.id,
+          message: "Task \"#{task.title}\" created"
+        })
+
         {:ok, task}
 
       error ->
@@ -30,6 +40,13 @@ defmodule MissionControl.Tasks do
     case task |> Task.changeset(attrs) |> Repo.update() do
       {:ok, task} ->
         broadcast_task_change({:task_updated, task})
+
+        Activity.append(%{
+          type: "task_updated",
+          task_id: task.id,
+          message: "Task \"#{task.title}\" updated"
+        })
+
         {:ok, task}
 
       error ->
@@ -38,9 +55,18 @@ defmodule MissionControl.Tasks do
   end
 
   def delete_task(%Task{} = task) do
+    # Capture task info before deletion for the activity event
+    task_title = task.title
+
     case Repo.delete(task) do
       {:ok, task} ->
         broadcast_task_change({:task_deleted, task})
+
+        Activity.append(%{
+          type: "task_deleted",
+          message: "Task \"#{task_title}\" deleted"
+        })
+
         {:ok, task}
 
       error ->
@@ -61,27 +87,41 @@ defmodule MissionControl.Tasks do
   # --- Assignment ---
 
   def assign_and_start_task(%Task{} = task) do
-    alias MissionControl.Git
-
-    with {:ok, branch_name} <- Git.create_branch(task),
-         :ok <- Git.checkout_branch(branch_name),
+    with {:ok, branch_name} <- @git.create_branch(task),
+         :ok <- @git.checkout_branch(branch_name),
          {:ok, agent} <-
            MissionControl.Agents.spawn_agent_for_task(task, branch_name: branch_name),
          {:ok, task} <-
            update_task(task, %{agent_id: agent.id, column: "assigned", branch_name: branch_name}),
          {:ok, task} <- move_task(task, "in_progress") do
+      Activity.append(%{
+        type: "task_assigned",
+        task_id: task.id,
+        agent_id: agent.id,
+        message: "Task \"#{task.title}\" assigned to #{agent.name}",
+        metadata: %{"branch" => branch_name}
+      })
+
       {:ok, task, agent}
     end
   end
 
   def assign_task_to_existing_agent(%Task{} = task, agent_id) do
-    alias MissionControl.Git
-
-    with {:ok, branch_name} <- Git.create_branch(task),
-         :ok <- Git.checkout_branch(branch_name),
+    with {:ok, branch_name} <- @git.create_branch(task),
+         :ok <- @git.checkout_branch(branch_name),
          {:ok, task} <-
            update_task(task, %{agent_id: agent_id, column: "assigned", branch_name: branch_name}),
          {:ok, task} <- move_task(task, "in_progress") do
+      agent = MissionControl.Agents.get_agent!(agent_id)
+
+      Activity.append(%{
+        type: "task_assigned",
+        task_id: task.id,
+        agent_id: agent_id,
+        message: "Task \"#{task.title}\" assigned to #{agent.name}",
+        metadata: %{"branch" => branch_name}
+      })
+
       {:ok, task}
     end
   end

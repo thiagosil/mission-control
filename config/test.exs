@@ -20,6 +20,9 @@ config :mission_control, MissionControlWeb.Endpoint,
 # Use a fast command for agent processes in tests
 config :mission_control, :default_agent_command, "echo '[agent] test output'"
 
+# Use a sandbox Git module so tests don't depend on working tree state
+config :mission_control, :git_module, MissionControl.Git.Sandbox
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 

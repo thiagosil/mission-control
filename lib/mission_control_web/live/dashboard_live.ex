@@ -1,6 +1,7 @@
 defmodule MissionControlWeb.DashboardLive do
   use MissionControlWeb, :live_view
 
+  alias MissionControl.Activity
   alias MissionControl.Agents
   alias MissionControl.Tasks
   alias MissionControl.Tasks.Task
@@ -12,10 +13,12 @@ defmodule MissionControlWeb.DashboardLive do
     if connected?(socket) do
       Agents.subscribe()
       Tasks.subscribe()
+      Activity.subscribe()
     end
 
     agents = Agents.list_agents()
     tasks = Tasks.list_tasks()
+    events = Activity.list(limit: 50)
 
     {:ok,
      assign(socket,
@@ -28,7 +31,11 @@ defmodule MissionControlWeb.DashboardLive do
        columns: @columns,
        show_task_form: false,
        task_form: to_form(Task.changeset(%Task{}, %{})),
-       assigning_task_id: nil
+       assigning_task_id: nil,
+       events: events,
+       right_panel: "terminal",
+       event_filter_type: nil,
+       event_filter_agent_id: nil
      )}
   end
 
@@ -166,6 +173,28 @@ defmodule MissionControlWeb.DashboardLive do
     end
   end
 
+  # --- Right panel events ---
+
+  def handle_event("switch_right_panel", %{"panel" => panel}, socket) do
+    {:noreply, assign(socket, right_panel: panel)}
+  end
+
+  def handle_event("filter_events", params, socket) do
+    type = if params["type"] == "", do: nil, else: params["type"]
+
+    agent_id =
+      case params["agent_id"] do
+        "" -> nil
+        nil -> nil
+        id -> String.to_integer(id)
+      end
+
+    events = Activity.list(build_event_filters(type, agent_id))
+
+    {:noreply,
+     assign(socket, events: events, event_filter_type: type, event_filter_agent_id: agent_id)}
+  end
+
   # --- PubSub handlers ---
 
   @impl true
@@ -218,6 +247,15 @@ defmodule MissionControlWeb.DashboardLive do
     {:noreply, assign(socket, tasks: tasks)}
   end
 
+  def handle_info({:new_event, event}, socket) do
+    if event_matches_filters?(event, socket.assigns) do
+      events = [event | socket.assigns.events] |> Enum.take(50)
+      {:noreply, assign(socket, events: events)}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   # --- Helpers ---
@@ -244,7 +282,8 @@ defmodule MissionControlWeb.DashboardLive do
     assign(socket,
       selected_agent_id: agent_id,
       terminal_lines: buffer,
-      terminal_status: status
+      terminal_status: status,
+      right_panel: "terminal"
     )
   end
 
@@ -290,6 +329,39 @@ defmodule MissionControlWeb.DashboardLive do
 
   defp running_agents(agents) do
     Enum.filter(agents, &(&1.status == "running"))
+  end
+
+  defp build_event_filters(type, agent_id) do
+    opts = [limit: 50]
+    opts = if type, do: Keyword.put(opts, :type, type), else: opts
+    opts = if agent_id, do: Keyword.put(opts, :agent_id, agent_id), else: opts
+    opts
+  end
+
+  defp event_matches_filters?(event, assigns) do
+    type_match = is_nil(assigns.event_filter_type) || event.type == assigns.event_filter_type
+
+    agent_match =
+      is_nil(assigns.event_filter_agent_id) || event.agent_id == assigns.event_filter_agent_id
+
+    type_match && agent_match
+  end
+
+  defp event_dot_color("agent_spawned"), do: "bg-success"
+  defp event_dot_color("agent_stopped"), do: "bg-base-content/30"
+  defp event_dot_color("agent_exited"), do: "bg-warning"
+  defp event_dot_color("task_created"), do: "bg-info"
+  defp event_dot_color("task_updated"), do: "bg-primary"
+  defp event_dot_color("task_deleted"), do: "bg-error"
+  defp event_dot_color("task_assigned"), do: "bg-accent"
+  defp event_dot_color(_), do: "bg-base-content/30"
+
+  defp format_event_time(datetime) do
+    Calendar.strftime(datetime, "%H:%M:%S")
+  end
+
+  defp event_type_label(type) do
+    type |> String.replace("_", " ") |> String.capitalize()
   end
 
   @impl true
@@ -438,43 +510,126 @@ defmodule MissionControlWeb.DashboardLive do
         </div>
       </main>
 
-      <%!-- Terminal Viewer (right, always dark) --%>
+      <%!-- Right Panel (Terminal / Activity) --%>
       <aside class="w-96 flex-shrink-0 flex flex-col border-l border-base-300" data-theme="dark">
-        <div class="px-5 py-3.5 border-b border-base-300 bg-base-100 flex items-center justify-between">
-          <span class="text-xs font-medium text-base-content/50">
-            <%= if agent = selected_agent(@agents, @selected_agent_id) do %>
-              {agent.name}
-            <% else %>
-              Terminal
-            <% end %>
-          </span>
-          <%= if @selected_agent_id && selected_agent(@agents, @selected_agent_id) && selected_agent(@agents, @selected_agent_id).status == "running" do %>
-            <button
-              phx-click="stop_agent"
-              phx-value-id={@selected_agent_id}
-              class="text-xs text-error/70 hover:text-error transition-colors cursor-pointer"
-            >
-              Stop
-            </button>
-          <% end %>
+        <%!-- Tab bar --%>
+        <div class="flex border-b border-base-300 bg-base-100">
+          <button
+            phx-click="switch_right_panel"
+            phx-value-panel="terminal"
+            class={"flex-1 px-4 py-2.5 text-xs font-medium transition-colors cursor-pointer " <>
+              if(@right_panel == "terminal",
+                do: "text-base-content border-b-2 border-primary",
+                else: "text-base-content/40 hover:text-base-content/70"
+              )}
+          >
+            Terminal
+          </button>
+          <button
+            phx-click="switch_right_panel"
+            phx-value-panel="activity"
+            class={"flex-1 px-4 py-2.5 text-xs font-medium transition-colors cursor-pointer " <>
+              if(@right_panel == "activity",
+                do: "text-base-content border-b-2 border-primary",
+                else: "text-base-content/40 hover:text-base-content/70"
+              )}
+          >
+            Activity
+          </button>
         </div>
-        <div
-          id="terminal-output"
-          phx-hook="TerminalScroll"
-          class="flex-1 overflow-y-auto p-4 bg-base-100 font-mono text-sm text-base-content/80"
-        >
-          <%= if @selected_agent_id == nil do %>
-            <p class="text-base-content/50">Select an agent to view its terminal output</p>
-          <% else %>
-            <div :for={line <- @terminal_lines} class="whitespace-pre-wrap break-all leading-relaxed">
-              {line}
-            </div>
-            <%= if @terminal_status do %>
-              <div class={"mt-2 text-xs font-medium " <> if(@terminal_status == "crashed", do: "text-error", else: "text-base-content/40")}>
-                — process {if @terminal_status == "crashed", do: "crashed", else: "exited"} —
-              </div>
+
+        <%!-- Terminal content --%>
+        <div class={if(@right_panel == "terminal", do: "flex-1 flex flex-col", else: "hidden")}>
+          <div class="px-5 py-2 bg-base-100 flex items-center justify-between">
+            <span class="text-xs font-medium text-base-content/50">
+              <%= if agent = selected_agent(@agents, @selected_agent_id) do %>
+                {agent.name}
+              <% else %>
+                Select an agent
+              <% end %>
+            </span>
+            <%= if @selected_agent_id && selected_agent(@agents, @selected_agent_id) && selected_agent(@agents, @selected_agent_id).status == "running" do %>
+              <button
+                phx-click="stop_agent"
+                phx-value-id={@selected_agent_id}
+                class="text-xs text-error/70 hover:text-error transition-colors cursor-pointer"
+              >
+                Stop
+              </button>
             <% end %>
-          <% end %>
+          </div>
+          <div
+            id="terminal-output"
+            phx-hook="TerminalScroll"
+            class="flex-1 overflow-y-auto p-4 bg-base-100 font-mono text-sm text-base-content/80"
+          >
+            <%= if @selected_agent_id == nil do %>
+              <p class="text-base-content/50">Select an agent to view its terminal output</p>
+            <% else %>
+              <div
+                :for={line <- @terminal_lines}
+                class="whitespace-pre-wrap break-all leading-relaxed"
+              >
+                {line}
+              </div>
+              <%= if @terminal_status do %>
+                <div class={"mt-2 text-xs font-medium " <> if(@terminal_status == "crashed", do: "text-error", else: "text-base-content/40")}>
+                  — process {if @terminal_status == "crashed", do: "crashed", else: "exited"} —
+                </div>
+              <% end %>
+            <% end %>
+          </div>
+        </div>
+
+        <%!-- Activity content --%>
+        <div class={
+          if(@right_panel == "activity", do: "flex-1 flex flex-col overflow-hidden", else: "hidden")
+        }>
+          <form phx-change="filter_events" class="px-4 py-2 bg-base-100 flex gap-2">
+            <select
+              name="type"
+              class="select select-xs select-bordered flex-1 bg-base-200 text-base-content text-xs"
+            >
+              <option value="">All types</option>
+              <option
+                :for={type <- MissionControl.Activity.Event.valid_types()}
+                value={type}
+                selected={@event_filter_type == type}
+              >
+                {event_type_label(type)}
+              </option>
+            </select>
+            <select
+              name="agent_id"
+              class="select select-xs select-bordered flex-1 bg-base-200 text-base-content text-xs"
+            >
+              <option value="">All agents</option>
+              <option
+                :for={agent <- @agents}
+                value={agent.id}
+                selected={@event_filter_agent_id == agent.id}
+              >
+                {agent.name}
+              </option>
+            </select>
+          </form>
+          <div id="activity-feed" class="flex-1 overflow-y-auto px-4 pb-4">
+            <%= if @events == [] do %>
+              <p class="text-xs text-base-content/40 text-center mt-8">No activity yet</p>
+            <% else %>
+              <ul class="space-y-1 mt-1">
+                <li :for={event <- @events} class="flex items-start gap-2 py-1.5">
+                  <span class={"w-2 h-2 rounded-full flex-shrink-0 mt-1 " <> event_dot_color(event.type)} />
+                  <div class="flex-1 min-w-0">
+                    <p class="text-xs text-base-content/70 leading-snug truncate">{event.message}</p>
+                    <span class="text-[10px] text-base-content/30">
+                      {format_event_time(event.inserted_at)}
+                    </span>
+                  </div>
+                </li>
+              </ul>
+            <% end %>
+          </div>
         </div>
       </aside>
     </div>
