@@ -816,8 +816,18 @@ defmodule MissionControlWeb.DashboardLive do
                       name="task[priority]"
                       class="select select-bordered select-sm w-full"
                     >
-                      <option value="normal" selected>Normal</option>
-                      <option value="urgent">Urgent</option>
+                      <option
+                        value="normal"
+                        selected={to_string(@task_form[:priority].value) != "urgent"}
+                      >
+                        Normal
+                      </option>
+                      <option
+                        value="urgent"
+                        selected={to_string(@task_form[:priority].value) == "urgent"}
+                      >
+                        Urgent
+                      </option>
                     </select>
                   </div>
                   <div class="flex-1">
