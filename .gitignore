@@ -40,3 +40,6 @@ npm-debug.log
 # Database files
 *.db
 *.db-*
+
+# Local config (copy from mission_control.toml.example)
+mission_control.toml

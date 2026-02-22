@@ -14,6 +14,7 @@ defmodule MissionControl.Application do
        repos: Application.fetch_env!(:mission_control, :ecto_repos), skip: skip_migrations?()},
       {DNSCluster, query: Application.get_env(:mission_control, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: MissionControl.PubSub},
+      MissionControl.Config,
       {Registry, keys: :unique, name: MissionControl.AgentRegistry},
       MissionControl.Agents.AgentSupervisor,
       # Reset agents left as "running" from a previous server session

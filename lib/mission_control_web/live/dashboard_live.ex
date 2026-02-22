@@ -46,7 +46,8 @@ defmodule MissionControlWeb.DashboardLive do
        orchestrator_output: "",
        orchestrator_status: nil,
        orchestrator_proposals: [],
-       orchestrator_goal: nil
+       orchestrator_goal: nil,
+       agent_backend: MissionControl.Config.agent_backend()
      )}
   end
 
@@ -746,6 +747,13 @@ defmodule MissionControlWeb.DashboardLive do
                   <span class="font-medium text-base-content/70">{length(queued_tasks(@tasks))}</span>
                   queued
                 </span>
+              </div>
+              <div
+                class="flex items-center gap-1.5 text-xs text-base-content/50"
+                id="stat-backend"
+              >
+                <.icon name="hero-cpu-chip-micro" class="size-3.5 text-base-content/30" />
+                <span class="font-medium text-base-content/70">{@agent_backend}</span>
               </div>
             </div>
           </div>

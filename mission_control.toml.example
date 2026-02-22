@@ -1,0 +1,28 @@
+# Mission Control — Agent Configuration
+#
+# Copy this file to `mission_control.toml` and edit as needed.
+# Environment variables (MC_AGENT_*) override values set here.
+
+[agent]
+# Which CLI backend to use: "claude", "codex", or any executable name.
+# Default: "claude"
+# Env: MC_AGENT_BACKEND
+backend = "claude"
+
+# Automatically accept/approve agent actions without human confirmation.
+# For claude this adds --dangerously-skip-permissions; for codex, --auto-approve.
+# Default: true
+# Env: MC_AGENT_AUTO_ACCEPT
+auto_accept = true
+
+# Override the base executable (e.g. a custom path or wrapper script).
+# The backend's template structure is preserved but the executable is swapped.
+# Default: nil (uses the backend name as the executable)
+# Env: MC_AGENT_COMMAND
+# command = "/usr/local/bin/my-claude-wrapper"
+
+# Fully custom command template. Use {prompt} as a placeholder.
+# When set, backend and auto_accept are ignored.
+# Default: nil
+# Env: MC_AGENT_COMMAND_TEMPLATE
+# command_template = "my-tool --flag '{prompt}'"

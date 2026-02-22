@@ -18,7 +18,8 @@ config :mission_control, MissionControlWeb.Endpoint,
   server: false
 
 # Use a fast command for agent processes in tests
-config :mission_control, :default_agent_command, "echo '[agent] test output'"
+config :mission_control, MissionControl.Config,
+  overrides: %{agent: %{backend: "test", command_template: "echo '[agent] test output'"}}
 
 # Use a sandbox Git module so tests don't depend on working tree state
 config :mission_control, :git_module, MissionControl.Git.Sandbox
